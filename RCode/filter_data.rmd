@@ -8,6 +8,9 @@ austinhouse2 = select(austinhouse, -3, -5,-24, -25, -26, -32, -33 , -47) #remove
 austinhouse3 = filter(austinhouse2, homeType == "Single Family") #filters to only single family homes
 austinhouse3
 
+write.csv(austinhouse3, "C:/Users/Ethan/Documents/College/stor 664/AustinHousingDataFiltered.csv", row.names = FALSE)
+
+
 ```
 
 
