@@ -1,2 +1,4 @@
-https://fred.stlouisfed.org/series/MORTGAGE30US
-https://fred.stlouisfed.org/series/GDPALL48453#
+(30 year mortgage rate) https://fred.stlouisfed.org/series/MORTGAGE30US
+(Austin GDP anual)https://fred.stlouisfed.org/series/GDPALL48453#
+(unemploymnet rate) https://data.bls.gov/pdq/SurveyOutputServlet
+(texas quarterly GDP) https://fred.stlouisfed.org/series/TXNQGSP
