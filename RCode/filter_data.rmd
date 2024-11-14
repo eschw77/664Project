@@ -6,40 +6,15 @@ library(readr)
 library(dplyr)
 library(tidyverse)
 austinhouse = read.csv("/Users/evanschwartz/664Project/Data/austinHousingData.csv")
-austinhouse2 = select(austinhouse, -3, -5,-24, -25, -26, -32, -33 , -47) #removes desired columns
+austinhouse2 = select(austinhouse, -3, -5,-24, -26, -32, -33 , -47) #removes desired columns
 austinhouse3 = filter(austinhouse2, homeType == "Single Family") #filters to only single family homes
 austinhouse3
 
 
 ```
 
-# Merging The Economic data 
+# Merging The Economic data
 
 ```{r}
-weekly <- read.csv("/Users/evanschwartz/Downloads/fredgraph/Weekly_Ending_Thursday.csv")
-monthly <- read.csv("/Users/evanschwartz/Downloads/fredgraph/Monthly.csv")
-annual <- read.csv("/Users/evanschwartz/Downloads/fredgraph/Annual.csv")
-
-# We make the choice to copy one annual data point from 2020 to 2021 given that only a small number of sales occur in 2021 
-annual[4,5] = annual[3,5]
-
-
-start_date <-as.Date("2018-01-22")
-end_date <- as.Date("2021-01-30")
-
-expand_to_daily <- function(data, start_date, end_date) {
-  data %>%
-    
-    mutate(DATE = as.Date(DATE)) %>%
-    # 
-    complete(DATE = seq(start_date, end_date, by = "day")) %>%
-    # 
-    fill(value, .direction = "down")
-}
-
-
-daily_weekly <- expand_to_daily(weekly, start_date, end_date)
-daily_monthly <- expand_to_daily(monthly, start_date, end_date)
-daily_annual <- expand_to_daily(annual, start_date, end_date)
 
 ```
