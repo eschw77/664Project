@@ -1,0 +1,391 @@
+---
+title: "EDA"
+author: "Jimbo"
+date: "2024-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Packages
+```{r}
+# Install packages if they are not already installed
+#packages <- c("ggplot2", "plotly", "lattice",   # Data Visualization
+#              "dplyr", "tidyr", "data.table", "zoo", "lubricate"   # Data Manipulation
+#              "readr",      # Reading Data
+#              "isolationForest", "dbscan")                          
+
+# Install any packages that are not yet installed
+#install.packages(setdiff(packages, rownames(installed.packages())))
+
+# Load the libraries
+library(ggplot2)    # Data visualization
+library(plotly)     # Interactive plots
+library(lattice)    # Visualization for multivariate data
+
+#outlier testing
+library(isotree)
+library(dbscan)
+
+# Load necessary libraries
+library(lubridate)
+library(zoo)
+library(dplyr)      # Data manipulation
+library(tidyr)      # Data tidying and reshaping
+library(data.table) # Fast data manipulation
+
+library(readr)      # Fast file reading
+
+```
+
+# Loading in the Data
+```{r}
+austin_housing = read_csv("../Data/AustinHousingDataFiltered.csv")
+mortgage_rates = read_csv("../Data/MORTGAGE30US_with_laggard.csv")
+texas_gdp = read_csv("../Data/Texas_QGDP.csv")
+unemployment_rate = read_csv("../Data/Unemployment_rate_with_laggard.csv")
+```
+# Combining Data 
+Here we combine all ourdata into a single dataframe. We did this by merging on the latest sale date of the austin housing data set yeielding a dataframe a single dataframe where when the house was sold we have the corresponding GDP for the quarter, avergae 30 year mortgage rate for the week and unemployment rate for the month, we then created 1, 3 and 6 month laggard terms for the unemployment rates and mortgage rates and 3 and 6 moth laggards for GDP and merged them in a similar fashion. 
+```{r}
+# Convert dates to datetime format
+austin_housing <- austin_housing %>%
+  mutate(latest_saledate = ymd(latest_saledate))
+
+mortgage_rates <- mortgage_rates %>%
+  mutate(DATE = ymd(DATE),
+         week = floor_date(DATE, "week"))
+
+texas_gdp <- texas_gdp %>%
+  mutate(DATE = ymd(DATE),
+         quarter = quarter(DATE),
+         year = year(DATE))
+
+unemployment_rate <- unemployment_rate %>%
+  mutate(DATE = as.Date(paste("01", `Month-Year`), format="%d %b-%Y"),
+         month = floor_date(DATE, "month"))
+
+# Create 3-month, 6-month, and 1-month lags for GDP, Unemployment Rate, and Mortgage Rate
+# GDP Lags
+texas_gdp <- texas_gdp %>%
+  arrange(DATE) %>%
+  mutate(gdp_3_month_lag = lag(TXNQGSP, 3),
+         gdp_6_month_lag = lag(TXNQGSP, 6))
+
+# Unemployment Rate Lags
+unemployment_rate <- unemployment_rate %>%
+  arrange(DATE) %>%
+  mutate(unemployment_1_month_lag = lag(Rate, 1),
+         unemployment_3_month_lag = lag(Rate, 3),
+         unemployment_6_month_lag = lag(Rate, 6))
+
+# Mortgage Rate Lags
+mortgage_rates <- mortgage_rates %>%
+  arrange(DATE) %>%
+  mutate(mortgage_1_month_lag = lag(MORTGAGE30US, 4),   # Approx 4 weeks in a month
+         mortgage_3_month_lag = lag(MORTGAGE30US, 12),
+         mortgage_6_month_lag = lag(MORTGAGE30US, 24))
+
+# Extract year, quarter, month, and week from latest_saledate in Austin Housing
+austin_housing <- austin_housing %>%
+  mutate(sale_year = year(latest_saledate),
+         sale_quarter = quarter(latest_saledate),
+         sale_month = floor_date(latest_saledate, "month"),
+         sale_week = floor_date(latest_saledate, "week"))
+
+# Merge Austin Housing data with quarterly GDP based on year and quarter
+merged_data <- austin_housing %>%
+  left_join(texas_gdp, by = c("sale_year" = "year", "sale_quarter" = "quarter"))
+
+# Merge with monthly Unemployment Rate based on the month of the sale date
+merged_data <- merged_data %>%
+  left_join(unemployment_rate, by = c("sale_month" = "month"))
+
+# Merge with weekly Mortgage Rate based on the week of the sale date
+merged_data <- merged_data %>%
+  left_join(mortgage_rates, by = c("sale_week" = "week"))
+
+final_data <- merged_data %>%
+  select(-sale_year, -sale_quarter, -sale_month, -sale_week, -DATE, -DATE.x, -DATE.y, -`Month-Year`)
+
+# View the final merged data
+head(final_data)
+```
+
+# Cleaning the Data
+Fortunately the dataset is already very clean therefore we only make some small adjustments.
+
+### Creating factors
+Zipcode, Hometype should be converted to factors. Therefore we cast them to factors
+```{r}
+final_data$zipcode <- factor(final_data$zipcode)
+final_data$homeType <- factor(final_data$homeType)
+head(final_data)
+```
+### Dealing with NA's of the GDP laggard term
+Unfortuntely the S.T. Louis Fed Started collecting quarterly GDP data in Q1 of 2018 therefore we are unable to find quarterly data for GDP prior to 2018 and unable to generate the proper lagging terms. We therefore are going to replace the data lagging terms with the 2017 annual GDP numbers.
+```{r}
+final_data <- final_data %>%
+  mutate(gdp_3_month_lag = ifelse(is.na(gdp_3_month_lag), 1667313, gdp_3_month_lag))
+final_data <- final_data %>%
+  mutate(gdp_6_month_lag = ifelse(is.na(gdp_6_month_lag), 1667313, gdp_6_month_lag))
+```
+### Checking for other NA terms
+We check for other NA terms. and See that we have no other NA terms to deal with
+```{r}
+final_data %>%
+  summarise_all(~ sum(is.na(.)))
+```
+### Checking for duplicates
+checking for duplicates which yeilded no duplicates of the zpid therefore everylisting is unique
+```{r}
+duplicated_rows <- duplicated(final_data$zpid)
+#duplicated_rows
+```
+### Making sure that all datapoints are in the greater austin area
+
+```{r}
+zipcodes= c(read_csv("../Data/zipcodes.csv")$austin_zipcode, 787660, 78728, 78742)
+#final_data = final_data[!(final_data$zipcode %in% zipcodes), ]
+#View(final_data)
+final_data <- final_data[final_data$zipcode %in% zipcodes, ]
+```
+
+### Checking for Outliers
+#### home prices
+First we will check home price and make sure there are no weird discrepencies
+sorting by descending price we see that zpid 29361735 is listed as 5000 when crossrefrencing with zillow zillow recomends price the expected rent at 4967 therefore this is likely listed for rent and wound up in the forsale dataframe therefore we will remove it
+```{r}
+final_data <- final_data[final_data$zpid != 29361735, ]
+```
+Similar issues with 70337317, 83123966, 29381466, 29332104, 29338824,29471989, 29339192, 29492341,87381493,87382949,
+87380180.
+
+
+```{r}
+final_data <- final_data[!(final_data$zpid %in% c(70337317, 83123966, 29381466, 29332104, 29338824,29471989, 29339192, 29492341,87381493,87382949, 87380180)), ]
+#View(final_data)
+```
+
+Now lets look at the other extreme. We only find one extreme outlier within the first 
+we find that 80097372 is unreasonalby priced
+
+```{r}
+final_data <- final_data[final_data$zpid != 80097372, ]
+```
+
+When looking at lot size we have some corrections to make,
+#### lot size
+We assume that 119629407, the lot size is misrepresented so we replace its lot size with a similar house in the neighborhood.
+The remaining lot sizes where cross refrenced with realtor.com and replaced with the true lot size, this satisfies all lotsizes under 1,000 squarefeet
+
+```{r}
+final_data[final_data$zpid == 29510039, "lotSizeSqFt"] <- 5663
+final_data[final_data$zpid == 29497059, "lotSizeSqFt"] <- 7231
+final_data[final_data$zpid == 2089631697, "lotSizeSqFt"] <- 3920
+final_data[final_data$zpid == 119629407, "lotSizeSqFt"] <- 7840
+final_data[final_data$zpid == 2089877907, "lotSizeSqFt"] <- 1983
+final_data[final_data$zpid == 29478717, "lotSizeSqFt"] <- 7856
+final_data[final_data$zpid == 29478717, "lotSizeSqFt"] <- 7856
+
+
+```
+
+doing the same thing for the upper exteme we get
+Some houses included the entire development as there lot size and needed to be dropped this we fixed or removed everything up to a lot size of about 6 acres while there is still a chance that some of the data is incorrect we corrected the worst offenders
+```{r}
+final_data[final_data$zpid == 58297775, "lotSizeSqFt"] <- 34412
+final_data[final_data$zpid == 124837778, "lotSizeSqFt"] <- 19000
+final_data[final_data$zpid == 202157510, "lotSizeSqFt"] <- 85377
+final_data[final_data$zpid == 29552375, "lotSizeSqFt"] <- 5968
+final_data[final_data$zpid == 29420734, "lotSizeSqFt"] <- 8786
+final_data[final_data$zpid == 121722729, "lotSizeSqFt"] <- 5881
+final_data <- final_data[final_data$zpid != 119616680, ]
+final_data <- final_data[final_data$zpid != 119622539, ]
+final_data[final_data$zpid == 80089399, "lotSizeSqFt"] <- 5802
+final_data <- final_data[final_data$zpid != 84076991, ]
+final_data <- final_data[final_data$zpid != 119628591, ]
+final_data[final_data$zpid == 69692482, "lotSizeSqFt"] <- 13939
+final_data <- final_data[final_data$zpid != 83820405, ]
+final_data <- final_data[final_data$zpid != 64431038, ]
+final_data <- final_data[final_data$zpid != 111966256, ]
+final_data[final_data$zpid == 29572654, "lotSizeSqFt"] <- 3067
+#View(final_data)
+```
+Fixing bathrooms
+```{r}
+final_data[final_data$zpid == 111972888, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 2086237848, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 119616859, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 114157301, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 94642666, "numOfBathrooms"] <- 5
+final_data[final_data$zpid == 88015087, "numOfBathrooms"] <- 3
+final_data <- final_data[final_data$zpid != 70330356, ]
+final_data[final_data$zpid == 63596867, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 64523076, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 58315415, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 58299964, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29613814, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29503854, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29491384, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29490118, "numOfBathrooms"] <- 3
+final_data <- final_data[final_data$zpid != 29473280, ]
+final_data[final_data$zpid == 29431752, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29490118, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29416552, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29397153, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29371391, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29335803, "numOfBathrooms"] <- 5
+final_data[final_data$zpid == 29327134, "numOfBathrooms"] <- 5
+```
+number of bedrooms
+```{r}
+final_data[final_data$zpid == 80093238, "numOfBedrooms"] <- 4
+final_data[final_data$zpid == 29416552, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 29391141, "numOfBedrooms"] <- 2
+final_data[final_data$zpid == 29387811, "numOfBedrooms"] <- 1
+final_data[final_data$zpid == 29447407, "numOfBedrooms"] <- 2
+final_data[final_data$zpid == 29446268, "numOfBedrooms"] <- 6
+final_data[final_data$zpid == 29503854, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 29503999, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 94642666, "numOfBedrooms"] <- 4
+```
+living area square footage
+```{r}
+final_data[final_data$zpid == 94642666, "livingAreaSqFt"] <- 5643
+final_data[final_data$zpid == 64523076, "livingAreaSqFt"] <- 2912
+final_data[final_data$zpid == 29478799, "livingAreaSqFt"] <- 1025
+final_data[final_data$zpid == 29478799, "livingAreaSqFt"] <- 1025
+final_data <- final_data[final_data$zpid != 2079572332, ]
+```
+
+#### Isolation Trees for global outliers
+
+We will run an isolation forest and local outlier factor algorithm to check for any outliers in our data set we will cast the net very wide and have loose thresholds and investigate the points outlined
+We start by removing the $zpid$ because this column could cause something to be considered a outlier however it will not be used in our regression
+
+```{r}
+ifinal_data = subset(final_data, select = -c(zpid))
+ifinal_data
+```
+
+
+```{r}
+library(isotree)
+
+# Fit the Isolation Forest model
+model <- isolation.forest(ifinal_data, ntrees = 500, prob_pick_pooled_gain = .4 ,  ndim = 1)
+
+# Obtain anomaly scores
+anomaly_scores <- predict(model, final_data, type = "score")
+
+# Identify outliers based on a threshold
+threshold <- 0.60
+outliers <- which(anomaly_scores > threshold)
+
+# View outlier indices
+print(outliers)
+
+```
+these are some notable potential outliers that should 
+```{r}
+final_data[outliers,]
+```
+#### Local Outlier Factor
+We will use local outlier factor algorithm to check for local outliers to doublecheck that there are no remaining issues with the data
+```{r}
+library(dbscan)
+```
+
+to check and see if we can effectively use LOF we will first check to make sure we have meanigful clusters we will run a t-sne algorithm to check
+```{r}
+# Step 1: Preprocessing
+# Handle different variable types appropriately
+
+## Numerical columns: Standardize
+numerical_cols <- select(final_data, where(is.numeric))
+numerical_scaled <- scale(numerical_cols)
+
+## Categorical columns: Convert to dummy variables
+categorical_cols <- select(final_data, where(is.character))
+categorical_dummies <- model.matrix(~ . - 1, data = categorical_cols) # One-hot encoding
+
+## Logical columns: Treat as binary (0/1)
+logical_cols <- select(final_data, where(is.logical))
+logical_binary <- as.data.frame(lapply(logical_cols, as.numeric))
+
+## Date columns: Convert to numeric (e.g., days since earliest date)
+date_cols <- select(final_data, where(is.Date))
+date_numeric <- as.data.frame(lapply(date_cols, function(x) as.numeric(difftime(x, min(x), units = "days"))))
+
+# Combine preprocessed data
+preprocessed_data <- cbind(numerical_scaled, categorical_dummies, logical_binary, date_numeric)
+```
+
+```{r}
+k_neighbors <- 40
+
+# Run LOF
+lof_scores <- lof(preprocessed_data, k = k_neighbors,minPts = 21)
+# Step 4: Analyze Results
+# Add LOF scores to the original dataset
+data_with_lof <- final_data %>%
+  mutate(LOF_Score = lof_scores)
+
+# View top outliers
+#top_outliers <- data_with_lof %>%
+#  arrange(desc(LOF_Score)) %>%
+#  head(100)
+
+#print(top_outliers)
+
+# Step 5: Visualize LOF Scores
+hist(data_with_lof$LOF_Score, breaks = 50, main = "Distribution of LOF Scores", xlab = "LOF Score", col = "skyblue")
+data_with_lof = data_with_lof[data_with_lof$LOF_Score>2,]
+```
+Creating a what might be potential outliers and listings we need to look over before proceeding
+```{r}
+merged_dataset <- unique(rbind(final_data[outliers,], subset(data_with_lof, select = -c(LOF_Score))))
+merged_dataset
+```
+## Chechking distributions of variables
+
+```{r}
+plot(density(final_data$latestPrice), col = "blue",
+     main = "Density Plot of Numerical Column", xlab = "Values")
+```
+
+We should probaly use a do a log or box-cox transformation on our predictor data and do a GlM model with a link function to a gamma distirbution or a inverse gaussian
+
+
+
+```{r}
+if (!require("fitdistrplus")) install.packages("fitdistrplus")
+library(fitdistrplus)
+if (!require("stats4")) install.packages("stats4")
+library(stats4)
+if (!require("statmod")) install.packages("statmod")
+library(statmod)
+
+# Log-likelihood function for the inverse Gaussian
+
+  -sum(log(dinvgauss(data, mean = mean, shape = shape)))
+
+# Fit the inverse Gaussian using MLE
+invgauss_fit <- mle(log_lik_invgauss, start = list(mean = mean(final_data$latestPrice), shape = 1), fixed = list(data = final_data$latestPrice))
+gamma_fit <- fitdist(final_data$latestPrice, "gamma")
+logLik(gamma_fit)
+logLik(invgauss_fit)
+AIC(gamma_fit)
+AIC(invgauss_fit)
+ks.test(data, "pgamma", shape = gamma_fit$estimate["shape"], rate = 1/gamma_fit$estimate["scale"])
+ks.test(data, "pinvgauss", mean = invgauss_fit$estimate["mean"], shape = invgauss_fit$estimate["shape"])
+```
+
+
+
+
+
+
