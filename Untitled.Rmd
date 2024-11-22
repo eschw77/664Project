@@ -1,0 +1,997 @@
+---
+title: "EDA"
+author: "Jimbo"
+date: "2024-11-14"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Packages
+
+```{r}
+# Install packages if they are not already installed
+#packages <- c("ggplot2", "plotly", "lattice",   # Data Visualization
+#              "dplyr", "tidyr", "data.table", "zoo", "lubricate"   # Data Manipulation
+#              "readr",      # Reading Data
+#              "isolationForest", "dbscan")                          
+
+# Install any packages that are not yet installed
+#install.packages(setdiff(packages, rownames(installed.packages())))
+
+# Load the libraries
+library(ggplot2)    # Data visualization
+library(plotly)     # Interactive plots
+library(lattice)    # Visualization for multivariate data
+
+#outlier testing
+library(isotree)
+library(dbscan)
+
+# Load necessary libraries
+library(lubridate)
+library(zoo)
+library(dplyr)      # Data manipulation
+library(tidyr)      # Data tidying and reshaping
+library(data.table) # Fast data manipulation
+
+library(readr)      # Fast file reading
+
+```
+
+# Loading in the Data
+
+```{r}
+austin_housing = read_csv("../Data/AustinHousingDataFiltered.csv")
+mortgage_rates = read_csv("../Data/MORTGAGE30US_with_laggard.csv")
+texas_gdp = read_csv("../Data/Texas_QGDP.csv")
+unemployment_rate = read_csv("../Data/Unemployment_rate_with_laggard.csv")
+```
+
+# Combining Data
+
+Here we combine all ourdata into a single dataframe. We did this by
+merging on the latest sale date of the austin housing data set yeielding
+a dataframe a single dataframe where when the house was sold we have the
+corresponding GDP for the quarter, avergae 30 year mortgage rate for the
+week and unemployment rate for the month, we then created 1, 3 and 6
+month laggard terms for the unemployment rates and mortgage rates and 3
+and 6 moth laggards for GDP and merged them in a similar fashion.
+
+```{r}
+# Convert dates to datetime format
+austin_housing <- austin_housing %>%
+  mutate(latest_saledate = ymd(latest_saledate))
+
+mortgage_rates <- mortgage_rates %>%
+  mutate(DATE = ymd(DATE),
+         week = floor_date(DATE, "week"))
+
+texas_gdp <- texas_gdp %>%
+  mutate(DATE = ymd(DATE),
+         quarter = quarter(DATE),
+         year = year(DATE))
+
+unemployment_rate <- unemployment_rate %>%
+  mutate(DATE = as.Date(paste("01", `Month-Year`), format="%d %b-%Y"),
+         month = floor_date(DATE, "month"))
+
+# Create 3-month, 6-month, and 1-month lags for GDP, Unemployment Rate, and Mortgage Rate
+# GDP Lags
+texas_gdp <- texas_gdp %>%
+  arrange(DATE) %>%
+  mutate(gdp_3_month_lag = lag(TXNQGSP, 3),
+         gdp_6_month_lag = lag(TXNQGSP, 6))
+
+# Unemployment Rate Lags
+unemployment_rate <- unemployment_rate %>%
+  arrange(DATE) %>%
+  mutate(unemployment_1_month_lag = lag(Rate, 1),
+         unemployment_3_month_lag = lag(Rate, 3),
+         unemployment_6_month_lag = lag(Rate, 6))
+
+# Mortgage Rate Lags
+mortgage_rates <- mortgage_rates %>%
+  arrange(DATE) %>%
+  mutate(mortgage_1_month_lag = lag(MORTGAGE30US, 4),   # Approx 4 weeks in a month
+         mortgage_3_month_lag = lag(MORTGAGE30US, 12),
+         mortgage_6_month_lag = lag(MORTGAGE30US, 24))
+
+# Extract year, quarter, month, and week from latest_saledate in Austin Housing
+austin_housing <- austin_housing %>%
+  mutate(sale_year = year(latest_saledate),
+         sale_quarter = quarter(latest_saledate),
+         sale_month = floor_date(latest_saledate, "month"),
+         sale_week = floor_date(latest_saledate, "week"))
+
+# Merge Austin Housing data with quarterly GDP based on year and quarter
+merged_data <- austin_housing %>%
+  left_join(texas_gdp, by = c("sale_year" = "year", "sale_quarter" = "quarter"))
+
+# Merge with monthly Unemployment Rate based on the month of the sale date
+merged_data <- merged_data %>%
+  left_join(unemployment_rate, by = c("sale_month" = "month"))
+
+# Merge with weekly Mortgage Rate based on the week of the sale date
+merged_data <- merged_data %>%
+  left_join(mortgage_rates, by = c("sale_week" = "week"))
+
+final_data <- merged_data %>%
+  select(-sale_year, -sale_quarter, -sale_month, -sale_week, -DATE, -DATE.x, -DATE.y, -`Month-Year`)
+
+# View the final merged data
+head(final_data)
+```
+
+# Cleaning the data
+
+### Creating factors
+
+Zipcode, city should be converted to factors. Therefore we cast them
+to factors hometype is all the same therefore we drop it
+
+```{r}
+final_data$zipcode <- factor(final_data$zipcode)
+final_data <- subset(final_data, select=-c(homeType))
+final_data$city <- factor(final_data$city)
+
+head(final_data)
+```
+
+### Dealing with NA's of the GDP laggard term
+
+Unfortuntely the S.T. Louis Fed Started collecting quarterly GDP data in
+Q1 of 2018 therefore we are unable to find quarterly data for GDP prior
+to 2018 and unable to generate the proper lagging terms. We therefore
+are going to replace the data lagging terms with the 2017 annual GDP
+numbers.
+
+```{r}
+final_data <- final_data %>%
+  mutate(gdp_3_month_lag = ifelse(is.na(gdp_3_month_lag), 1667313, gdp_3_month_lag))
+final_data <- final_data %>%
+  mutate(gdp_6_month_lag = ifelse(is.na(gdp_6_month_lag), 1667313, gdp_6_month_lag))
+```
+
+### Checking for other NA terms
+
+We check for other NA terms. and See that we have no other NA terms to
+deal with
+
+```{r}
+final_data %>% summarise_all(~ sum(is.na(.)))
+```
+
+### Checking for duplicates
+
+checking for duplicates which yeilded no duplicates of the zpid
+therefore everylisting is unique
+
+```{r}
+duplicated_rows <- duplicated(final_data$zpid)
+unique(duplicated_rows)
+```
+
+### Making sure that all datapoints are in the greater austin area
+
+We want to make sure that all the datapoints have zipcodes in the Austin
+area therefore we created a csv full of all zipcodes in the austin area
+then removed rows that did not fit the criterea
+
+```{r}
+zipcodes= c(read_csv("../Data/zipcodes.csv")$austin_zipcode, 787660, 78728, 78742)
+#final_data = final_data[!(final_data$zipcode %in% zipcodes), ]
+#View(final_data)
+final_data <- final_data[final_data$zipcode %in% zipcodes, ]
+```
+
+### Fixing the faulty datapoints
+
+We looked at the extreemes of each column making sure that there are no
+errors in the dataset if there were we found the house on another
+website and then either removed the datapoint if we could not find the
+house or the house information or we corrected the data point
+
+#### home prices
+
+First we will check home price and make sure there are no weird
+discrepencies sorting by descending price we see that zpid 29361735 is
+listed as 5000 when crossrefrencing with zillow zillow recomends price
+the expected rent at 4967 therefore this is likely listed for rent and
+wound up in the forsale dataframe therefore we will remove it
+
+```{r}
+final_data <- final_data[final_data$zpid != 29361735, ]
+```
+
+Similar issues with 70337317, 83123966, 29381466, 29332104,
+29338824,29471989, 29339192, 29492341,87381493,87382949, 87380180.
+
+```{r}
+final_data <- final_data[!(final_data$zpid %in% c(70337317, 83123966, 29381466, 29332104, 29338824,29471989, 29339192, 29492341,87381493,87382949, 87380180)), ]
+#View(final_data)
+```
+
+Now lets look at the other extreme. We only find one extreme outlier
+within the first we find that 80097372 is unreasonalby priced
+
+```{r}
+final_data <- final_data[final_data$zpid != 80097372, ]
+```
+
+#### Lotsize
+
+When looking at lot size we have some corrections to make, \#### lot
+size We assume that 119629407, the lot size is misrepresented so we
+replace its lot size with a similar house in the neighborhood. The
+remaining lot sizes where cross refrenced with realtor.com and replaced
+with the true lot size, this satisfies all lotsizes under 1,000
+squarefeet
+
+```{r}
+final_data[final_data$zpid == 29510039, "lotSizeSqFt"] <- 5663
+final_data[final_data$zpid == 29497059, "lotSizeSqFt"] <- 7231
+final_data[final_data$zpid == 2089631697, "lotSizeSqFt"] <- 3920
+final_data[final_data$zpid == 119629407, "lotSizeSqFt"] <- 7840
+final_data[final_data$zpid == 2089877907, "lotSizeSqFt"] <- 1983
+final_data[final_data$zpid == 29478717, "lotSizeSqFt"] <- 7856
+final_data[final_data$zpid == 29478717, "lotSizeSqFt"] <- 7856
+
+
+```
+
+doing the same thing for the upper exteme we get Some houses included
+the entire development as there lot size and needed to be dropped this
+we fixed or removed everything up to a lot size of about 6 acres while
+there is still a chance that some of the data is incorrect we corrected
+the worst offenders
+
+```{r}
+final_data[final_data$zpid == 58297775, "lotSizeSqFt"] <- 34412
+final_data[final_data$zpid == 124837778, "lotSizeSqFt"] <- 19000
+final_data[final_data$zpid == 202157510, "lotSizeSqFt"] <- 85377
+final_data[final_data$zpid == 29552375, "lotSizeSqFt"] <- 5968
+final_data[final_data$zpid == 29420734, "lotSizeSqFt"] <- 8786
+final_data[final_data$zpid == 121722729, "lotSizeSqFt"] <- 5881
+final_data <- final_data[final_data$zpid != 119616680, ]
+final_data <- final_data[final_data$zpid != 119622539, ]
+final_data[final_data$zpid == 80089399, "lotSizeSqFt"] <- 5802
+final_data <- final_data[final_data$zpid != 84076991, ]
+final_data <- final_data[final_data$zpid != 119628591, ]
+final_data[final_data$zpid == 69692482, "lotSizeSqFt"] <- 13939
+final_data <- final_data[final_data$zpid != 83820405, ]
+final_data <- final_data[final_data$zpid != 64431038, ]
+final_data <- final_data[final_data$zpid != 111966256, ]
+final_data[final_data$zpid == 29572654, "lotSizeSqFt"] <- 3067
+#View(final_data)
+```
+
+#### Bathrooms
+
+```{r}
+final_data[final_data$zpid == 111972888, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 2086237848, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 119616859, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 114157301, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 94642666, "numOfBathrooms"] <- 5
+final_data[final_data$zpid == 88015087, "numOfBathrooms"] <- 3
+final_data <- final_data[final_data$zpid != 70330356, ]
+final_data[final_data$zpid == 63596867, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 64523076, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 58315415, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 58299964, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29613814, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29503854, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29491384, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29490118, "numOfBathrooms"] <- 3
+final_data <- final_data[final_data$zpid != 29473280, ]
+final_data[final_data$zpid == 29431752, "numOfBathrooms"] <- 2
+final_data[final_data$zpid == 29490118, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29416552, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29397153, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29371391, "numOfBathrooms"] <- 3
+final_data[final_data$zpid == 29335803, "numOfBathrooms"] <- 5
+final_data[final_data$zpid == 29327134, "numOfBathrooms"] <- 5
+```
+
+#### Bedrooms
+
+```{r}
+final_data <- final_data[final_data$zpid != 29418127, ]
+final_data[final_data$zpid == 80093238, "numOfBedrooms"] <- 4
+final_data[final_data$zpid == 29416552, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 29391141, "numOfBedrooms"] <- 2
+final_data[final_data$zpid == 29387811, "numOfBedrooms"] <- 1
+final_data[final_data$zpid == 29447407, "numOfBedrooms"] <- 2
+final_data[final_data$zpid == 29446268, "numOfBedrooms"] <- 6
+final_data[final_data$zpid == 29503854, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 29503999, "numOfBedrooms"] <- 3
+final_data[final_data$zpid == 94642666, "numOfBedrooms"] <- 4
+```
+
+#### Living Area Square Footage
+
+```{r}
+final_data[final_data$zpid == 94642666, "livingAreaSqFt"] <- 5643
+final_data[final_data$zpid == 64523076, "livingAreaSqFt"] <- 2912
+final_data[final_data$zpid == 29478799, "livingAreaSqFt"] <- 1025
+final_data[final_data$zpid == 29478799, "livingAreaSqFt"] <- 1025
+final_data <- final_data[final_data$zpid != 2079572332, ]
+```
+
+### Anomaly detection in the dataset
+
+After seeing how many faulty points were collected from the zillow
+information we decided there are likely more errors that we were
+missing, we used two anomaly detection algorithm in Local Outlier Factor
+and Isolation forest in order to further clean our dataset to make sure
+everything was looking good
+
+#### Isolation Forest
+
+We will run an isolation forest and local outlier factor algorithm to
+check for any anomalies in our data set we will cast the net very wide
+and have loose thresholds and investigate the points outlined We start
+by removing the $zpid$ because this column could cause something to be
+considered a anomalies however it will not be used in our regression
+
+```{r}
+ifinal_data = subset(final_data, select = -c(zpid))
+ifinal_data
+```
+
+Here we do a bit of preprocessing of the data
+
+```{r}
+# Step 1: Preprocessing
+# Handle different variable types appropriately
+
+## Numerical columns: Standardize
+numerical_cols <- select(ifinal_data, where(is.numeric))
+numerical_scaled <- scale(numerical_cols)
+
+## Categorical columns: Convert to dummy variables
+categorical_cols <- select(ifinal_data, where(is.factor))
+categorical_dummies <- model.matrix(~ . - 1, data = categorical_cols) # One-hot encoding
+
+## Logical columns: Treat as binary (0/1)
+logical_cols <- select(ifinal_data, where(is.logical))
+logical_binary <- as.data.frame(lapply(logical_cols, as.numeric))
+
+## Date columns: Convert to numeric (e.g., days since earliest date)
+date_cols <- select(ifinal_data, where(is.Date))
+date_numeric <- as.data.frame(lapply(date_cols, function(x) as.numeric(difftime(x, min(x), units = "days"))))
+
+# Combine preprocessed data
+preprocessed_data <- cbind(numerical_scaled, categorical_dummies, logical_binary, date_numeric)
+```
+
+```{r}
+library(isotree)
+
+# Fit the Isolation Forest model
+model <- isolation.forest(ifinal_data, ntrees = 500, prob_pick_pooled_gain = .4 ,  ndim = 1)
+
+# Obtain anomaly scores
+anomaly_scores <- predict(model, final_data, type = "score")
+
+# Identify outliers based on a threshold
+threshold <- 0.60
+outliers <- which(anomaly_scores > threshold)
+
+# View outlier indices
+print(outliers)
+
+```
+
+these are some notable potential anomalies that should
+
+```{r}
+final_data[outliers,]
+```
+
+#### Local Outlier Factor
+
+We will use local outlier factor algorithm to check for local outliers
+to doublecheck that there are no remaining anomalies with the data
+
+```{r}
+library(dbscan)
+```
+
+to check and see if we can effectively use LOF we will first check to
+make sure we have meanigful clusters we will run a k-means algorithm and
+select the K associated with elbow plot of the within cluster residual
+error
+
+```{r}
+library(ggplot2)
+
+# Function to calculate total within-cluster sum of squares (WSS)
+calculate_wss <- function(data, max_k) {
+  wss <- numeric(max_k)
+  for (k in 1:max_k) {
+    kmeans_result <- kmeans(data, centers = k, nstart = 10)
+    wss[k] <- kmeans_result$tot.withinss
+  }
+  return(wss)
+}
+
+# Define the maximum number of clusters to test
+max_k <- 20
+
+# Calculate WSS for each k
+wss <- calculate_wss(preprocessed_data, max_k)
+
+# Create the elbow plot
+elbow_plot <- data.frame(k = 1:max_k, wss = wss)
+ggplot(elbow_plot, aes(x = k, y = wss)) +
+  geom_line() +
+  geom_point() +
+  ggtitle("Elbow Plot for K-means Clustering") +
+  xlab("Number of Clusters (k)") +
+  ylab("Total Within-Cluster Sum of Squares (WSS)") +
+  theme_minimal()
+
+# Use the plot to identify the optimal k (elbow point)
+```
+
+Running the Local outlier factor algorithm with k= 4
+
+```{r}
+k_neighbors <- 4
+
+# Run LOF
+lof_scores <- lof(preprocessed_data, minPts = k_neighbors+1)
+# Step 4: Analyze Results
+# Add LOF scores to the original dataset
+data_with_lof <- final_data %>%
+  mutate(LOF_Score = lof_scores)
+
+# View top outliers
+#top_outliers <- data_with_lof %>%
+#  arrange(desc(LOF_Score)) %>%
+#  head(100)
+
+#print(top_outliers)
+
+# Step 5: Visualize LOF Scores
+hist(data_with_lof$LOF_Score, breaks = 50, main = "Distribution of LOF Scores", xlab = "LOF Score", col = "skyblue")
+data_with_lof = data_with_lof[data_with_lof$LOF_Score>2,]
+nrow(data_with_lof[data_with_lof$LOF_Score>2,])
+```
+
+#### Removing Anomalies
+
+Creating a what might be potential outliers and listings we need to look
+over before proceeding
+
+```{r}
+merged_dataset <- unique(rbind(final_data[outliers,], subset(data_with_lof, select = -c(LOF_Score))))
+#merged_dataset
+```
+
+```{r}
+remove = c(merged_dataset$zpid)
+final_data <- final_data %>% filter(!zpid %in% remove)
+```
+
+```{r}
+write.csv(final_data, "data_comb_noanom.csv", row.names = FALSE)
+```
+
+## Chechking distributions of variables
+
+```{r}
+plot(density(final_data$latestPrice), col = "blue",
+     main = "Density Plot of Numerical Column", xlab = "Values")
+```
+
+We should probaly use a do a log or box-cox transformation on our
+predictor data and do a GlM model with a link function to a gamma
+distirbution or a inverse gaussian
+
+```{r}
+
+```
+
+# Checking Linear Relationship with predictor
+
+I think we should apply a log transformation to the response variable,
+lotSizeSqFt
+
+```{r}
+plot(log(final_data$lotSizeSqFt), log(final_data$latestPrice))
+```
+
+I think we should take the sqaure root of LivingAreaSqft
+
+```{r}
+plot(sqrt(final_data$livingAreaSqFt), log(final_data$latestPrice))
+```
+
+I think we should take log of avgSchool distance
+
+```{r}
+plot(log(final_data$avgSchoolDistance), log(final_data$latestPrice))
+```
+
+AVG school rating looks fine
+
+```{r}
+plot(final_data$avgSchoolRating, log(final_data$latestPrice))
+```
+
+I think we should log transofrm avg school size
+
+```{r}
+plot(log(final_data$avgSchoolSize), log(final_data$latestPrice))
+```
+
+i think we should do
+
+```{r}
+plot(final_data$MedianStudentsPerTeacher, log(final_data$latestPrice))
+```
+
+i thin knum of bedrooms should have no transformation
+
+```{r}
+plot((final_data$numOfBedrooms), log(final_data$latestPrice))
+```
+
+i thin knum of bedrooms should have no transformation
+
+```{r}
+plot((final_data$numOfBathrooms), log(final_data$latestPrice))
+```
+
+think number of stories should have a no transformation
+
+```{r}
+plot((final_data$numOfStories), log(final_data$latestPrice))
+```
+
+think number of security features should have a no transformation
+
+```{r}
+plot((final_data$numOfSecurityFeatures), log(final_data$latestPrice))
+```
+
+think number of security features should have a no transformation
+
+```{r}
+plot((final_data$numOfPatioAndPorchFeatures), log(final_data$latestPrice))
+```
+
+num of parking features should have no transformation
+
+```{r}
+plot((final_data$numOfParkingFeatures), log(final_data$latestPrice))
+```
+
+num of appliances should have no transformation
+
+```{r}
+plot((final_data$numOfAppliances), log(final_data$latestPrice))
+```
+
+GDP should have no transformation
+
+```{r}
+plot((final_data$TXNQGSP), log(final_data$latestPrice))
+```
+
+unemployment should have no transformation
+
+```{r}
+plot((final_data$Rate), log(final_data$latestPrice))
+```
+
+Mortgage rate should have no transformation
+
+```{r}
+plot((final_data$MORTGAGE30US), log(final_data$latestPrice))
+```
+
+number of price changes
+
+```{r}
+plot((final_data$numPriceChanges), log(final_data$latestPrice))
+```
+
+Year Built should have square root transformations
+
+```{r}
+plot(sqrt(final_data$yearBuilt), log(final_data$latestPrice))
+```
+
+Lastly we will do parking spaces which should have a sqrt trasformation
+
+```{r}
+plot(final_data$parkingSpaces, log(final_data$latestPrice))
+```
+```{r}
+plot(final_data$MORTGAGE30US, log(final_data$latestPrice))
+
+```
+linear
+```{r}
+plot(final_data$Rate, log(final_data$latestPrice))
+```
+linear
+```{r}
+plot(final_data$TXNQGSP, log(final_data$latestPrice))
+```
+linear
+
+Enacting the transformations
+
+```{r}
+final_data_transform = final_data
+final_data_transform$loglatestPrice = log(final_data_transform$latestPrice)
+final_data_transform$loglotSizeSqFt = log(final_data_transform$lotSizeSqFt)
+final_data_transform$sqrtlivingAreaSqFt = sqrt(final_data_transform$livingAreaSqFt)
+final_data_transform$logavgSchoolDistance = log(final_data_transform$avgSchoolDistance)
+final_data_transform$logavgSchoolSize = log(final_data_transform$avgSchoolSize)
+final_data_transform$sqrtyearBuilt = sqrt(final_data_transform$yearBuilt)
+final_data_transform = subset(final_data_transform, select = -c(latestPrice, lotSizeSqFt, avgSchoolDistance, avgSchoolSize, yearBuilt ))
+```
+
+# Dropping Columns that have nothing to do with Price
+We also drop city because of its weire behavior where some cities are mismatched and over 90% of the cities are listed as austin
+
+```{r}
+final_data_transform <- subset(final_data_transform, select = -c(zpid, latitude, longitude, city, latest_saledate, latest_saleyear))
+```
+
+
+# Checking Correlation
+#### Cramesrs V test for Logical Variable and categorical variables
+
+```{r, eval=FALSE}
+facto_final = final_data_transform
+facto_final$hasAssociation <- factor(final_data_transform$hasAssociation)
+facto_final$hasCooling <- factor(final_data_transform$hasCooling)
+facto_final$hasGarage <- factor(final_data_transform$hasGarage)
+facto_final$hasHeating <- factor(final_data_transform$hasHeating)
+facto_final$hasSpa <- factor(final_data_transform$hasSpa)
+facto_final$hasView <- factor(final_data_transform$hasView)
+facto_final$zipcode <- factor(final_data_transform$zipcode)
+facto_final$month <- factor(final_data_transform$latest_salemonth)
+facto_final$propertyTaxRate <- factor(final_data_transform$propertyTaxRate)
+
+
+cat_col = c("hasAssociation", "hasCooling", "hasGarage", "hasHeating", "hasSpa", "hasView", "zipcode", "month", "propertyTaxRate")
+```
+
+```{r, eval=FALSE}
+library(DescTools)
+cramer_matrix <- sapply(cat_col , function(x) {
+  sapply(cat_col, function(y) CramerV(facto_final[[x]], facto_final[[y]]))
+})
+print(cramer_matrix)
+```
+Using a cutoff of $r > .65$ We will combine $zipcode$ and $hasAssociation$, because both are could be important in our data anlysis. we will drop $propertyTaxRate$ which is correlated with $zipcode$ because there is little across the whole dataset and it is likely not a major determinent of wheter you buy a house or not.  $hasCooling$ and $hasHeating$ likely has lots of double counted data therefore we will drop $hasHeating$ because cooling is likely more important in texas
+```{r}
+final_data_transform$zipAsso =  interaction(facto_final$zipcode, facto_final$hasAssociation, sep = "_")
+final_data_transform <- subset(final_data_transform, select = -c(zipcode, hasAssociation, hasHeating, propertyTaxRate))
+#doublechecking data combined variables are still not correlated
+facto_final = final_data_transform
+facto_final$hasCooling <- factor(final_data_transform$hasCooling)
+facto_final$hasGarage <- factor(final_data_transform$hasGarage)
+facto_final$hasSpa <- factor(final_data_transform$hasSpa)
+facto_final$hasView <- factor(final_data_transform$hasView)
+facto_final$zipAsso <- factor(final_data_transform$zipAsso)
+facto_final$month <- factor(final_data_transform$latest_salemonth)
+cat_col = c("zipAsso", "hasCooling", "hasGarage", "hasSpa", "hasView", "month")
+cramer_matrix <- sapply(cat_col , function(x) {
+  sapply(cat_col, function(y) CramerV(facto_final[[x]], facto_final[[y]]))
+})
+print(cramer_matrix)
+```
+
+
+
+#### Checking Correlation of continous numerical variables
+```{r}
+cont_col = subset(final_data_transform, select = c(sqrtyearBuilt, logavgSchoolSize, logavgSchoolDistance, sqrtlivingAreaSqFt, loglotSizeSqFt, mortgage_6_month_lag, mortgage_3_month_lag, mortgage_1_month_lag, MORTGAGE30US, unemployment_6_month_lag, unemployment_3_month_lag, unemployment_1_month_lag, Rate, gdp_6_month_lag, gdp_3_month_lag, TXNQGSP, avgSchoolRating, MedianStudentsPerTeacher))
+#View(cor(cont_col))
+```
+Using a cut off of $r = .7$ we see that $MedianStudentsPerTeacher$ is correlated with $avgSchoolRating$, we will drop $medianStudentsPerTeacher$ since it likely is factored into the school rating. Additionally our economic data is in trouble with correlation. The Economic data we wont remove anything because we want to select the best lagging terms when we do our regression however some combinations that we should not include together are $TXNQGSP$ and $Rate$, $gdp3monthlag$ and $mortgageg30$, $mortgage1monthlag$, $gdp6monthlag$ and all the mortgage data.
+
+```{r}
+final_data_transform <- subset(final_data_transform, select = -MedianStudentsPerTeacher)
+```
+
+
+#### Checking point biseral on the categorical and numerical variables
+
+First we are going to 1 hot encode our categorical, logical and time variables that remain
+
+```{r}
+library(ltm)
+cont_col = subset(final_data_transform, select = c(sqrtyearBuilt, logavgSchoolSize, logavgSchoolDistance, sqrtlivingAreaSqFt, loglotSizeSqFt, mortgage_6_month_lag, mortgage_3_month_lag, mortgage_1_month_lag, MORTGAGE30US, unemployment_6_month_lag, unemployment_3_month_lag, unemployment_1_month_lag, Rate, gdp_6_month_lag, gdp_3_month_lag, TXNQGSP, avgSchoolRating))
+
+hot1 = subset(final_data_transform, select = c(zipAsso, hasCooling, hasGarage, hasSpa, hasView, latest_salemonth))
+
+hot1$month <- factor(hot1$latest_salemonth, levels = 1:12)
+hot1$zipAsso <- factor(hot1$zipAsso)
+hot1$hasCooling <- factor(hot1$hasCooling)
+hot1$hasGarage <- factor(hot1$hasGarage)
+hot1$hasSpa <- factor(hot1$hasSpa)
+hot1$hasView <- factor(hot1$hasView)
+
+# Convert factor columns to dummy variables
+hot1 <- model.matrix(~ zipAsso + hasCooling + hasGarage+ month + hasSpa + hasView - 1, data = hot1)
+
+point_biserial_matrix <- function(binary_vars, numerical_vars) {
+  results <- matrix(NA, nrow = ncol(binary_vars), ncol = ncol(numerical_vars),
+                    dimnames = list(colnames(binary_vars), colnames(numerical_vars)))
+  
+  for (bin_col in colnames(binary_vars)) {
+    for (num_col in colnames(numerical_vars)) {
+      results[bin_col, num_col] <- biserial.cor(numerical_vars[[num_col]], binary_vars[[bin_col]])
+    }
+  }
+  return(results)
+}
+
+correlation_matrix <- point_biserial_matrix(as.data.frame(hot1), cont_col)
+#View(correlation_matrix)
+```
+
+Using a cut off of $r = .7$ we checked the correlation between the 1 hot encoded binary variables and continous numerical variables and came up with no issues.
+
+#### Using Spearman rank for count variables
+We must assume that the relationship between variables is monotonic which makes since all the data is count of the features of the house, or number of schools in the area. 
+```{r}
+disc_cols = subset(final_data_transform, select = c(garageSpaces, numPriceChanges, numOfAppliances, numOfParkingFeatures, numOfPatioAndPorchFeatures, numOfSecurityFeatures, numOfWaterfrontFeatures, numOfPrimarySchools, numOfElementarySchools, numOfMiddleSchools, numOfHighSchools, numOfBathrooms, numOfBedrooms,numOfStories, parkingSpaces))
+#View(cor(disc_cols, method = "spearman"))
+```
+
+Using a cutoff of $r = .7$ we see:
+$garageSpaces$ is highly correlated with $numOfParkingFeatures$ and $parkingSpaces$ therefore we will drop $garageSpaces$ as we beleive parking in genral is more important than having a garage. If garage spaces is larger than 0 then the categorical variable $hasGarage$ will be true therefore we are also going to remove $hasGarage$ 
+$numOfParkingFeatures$ is highly correlated with $parkingSpaces$ therefore we will drop $numOfParkingFeatures$ as we beleive parking spaces gives more information than the amount parking features
+$numOfPrimarySchools$ is Highly correlated with $numOfElementarySchools$ this is likely because they are the same thing therefore we will combine them by summing
+```{r}
+final_data_transform$numOfElementarySchools = final_data_transform$numOfPrimarySchools + final_data_transform$numOfElementarySchools
+final_data_transform = subset(final_data_transform, select = -c(numOfPrimarySchools, numOfParkingFeatures, hasGarage,garageSpaces ))
+#doublechecking the combination does not reintroduce more correlation
+disc_cols = subset(final_data_transform, select = c( numPriceChanges, numOfAppliances, numOfPatioAndPorchFeatures, numOfSecurityFeatures, numOfWaterfrontFeatures, numOfElementarySchools, numOfMiddleSchools, numOfHighSchools, numOfBathrooms, numOfBedrooms,numOfStories, parkingSpaces))
+#View(cor(disc_cols, method = "spearman"))
+```
+
+#### Using Poisson regression to test for correlation between count and continous data
+```{r}
+disc_cols = disc_cols
+disc_cols$bath2 = round(disc_cols$numOfBathrooms)
+disc_cols = subset(disc_cols, select = -numOfBathrooms)
+cont_col = cont_col
+```
+
+
+```{r}
+calculate_r2_matrix <- function(poisson_data, normal_data) {
+  # Initialize matrix to store results
+  result_matrix1 <- matrix(NA, nrow = ncol(normal_data), ncol = ncol(poisson_data), 
+                          dimnames = list(colnames(normal_data), colnames(poisson_data)))
+  result_matrix2 <- matrix(NA, nrow = ncol(normal_data), ncol = ncol(poisson_data), 
+                          dimnames = list(colnames(normal_data), colnames(poisson_data)))
+  # Loop through all combinations of columns
+  for (p_col in colnames(poisson_data)) {
+    for (n_col in colnames(normal_data)) {
+      # Extract variables
+      poisson_var <- poisson_data[[p_col]]
+      normal_var <- normal_data[[n_col]]
+      glm.fit <- glm(poisson_var ~ normal_var, family = poisson(link = log))
+      sumar = summary(glm.fit)
+      result_matrix1[n_col, p_col] = PseudoR2(glm.fit, which = "McFadden")
+      result_matrix2[n_col, p_col]= sumar$coefficients["normal_var", "Pr(>|z|)"]
+    }
+  }
+  return(list(as.data.frame(result_matrix1), as.data.frame(result_matrix2)))
+}
+x = calculate_r2_matrix(disc_cols, cont_col)
+View(x[[1]])
+View(x[[2]])
+
+```
+Using a cutoff of $R^2_{McFadden} = .25$ we find the following columns are correlated
+We see that $numOfPorchAndPatioFeatures$ and $gdp_6_month_lag$ are correalted
+$numOfBedrooms$ is correlated with $livingAreaSqFt$ 
+
+```{r}
+colnames(disc_cols[i])
+```
+
+
+
+
+$garageSpaces$, $parkingSpaces$, $numOfParkingFeatures$, are all corelated therefore we will keep $parkingSpaces$ reasoning being a garage is nice to have however parking is more important and no reasonable way to include a combination of variables since lots of it is double counting,
+Living Area is highly correlated with number of bedrooms and number of bathrooms, we will combine living area with number of Bedrooms and number of bathrooms by multiplying the living area by bathrrom for one column and by bedrooms for a second column, which led to high socrrelation between those variaboles therefore we are creating a new variable that is the sum of bathrooms and bedrooms multiplied by living area
+Number of primary, elementary middle and high schools are correlated we will deal with this by summing up the number of schools therefore we will have a variable called numOfschools
+Avg school rating is highly correlated with medianStudent Teacher, we will drop median student teacher ratio because parents are more concerned with the rating of the school district than the student teacher ratio
+
+
+```{r}
+final_dummy = subset(final_dummy, select = -c(garageSpaces, numOfParkingFeatures, hasGarageTRUE))
+final_dummy$numOfSchools = final_dummy$numOfPrimarySchools + final_dummy$numOfElementarySchools + final_dummy$numOfMiddleSchools + final_dummy$numOfHighSchools
+final_dummy = subset(final_dummy, select = -c(numOfPrimarySchools, numOfElementarySchools, numOfMiddleSchools, numOfHighSchools))
+final_dummy = subset(final_dummy, select = -MedianStudentsPerTeacher)
+final_dummy$LABedBath = final_dummy$sqrtlivingAreaSqFt * (final_dummy$numOfBedrooms + final_dummy$numOfBathrooms)
+final_dummy = subset(final_dummy, select = -c(sqrtlivingAreaSqFt, numOfBathrooms, numOfBedrooms))
+# rechecking Correlation
+#View(cor(final_dummy))
+```
+#### Checking New variables linearity
+
+```{r}
+plot(final_dummy$numOfSchools , final_dummy$loglatestPrice)
+```
+```{r}
+plot(final_dummy$LABedBath , final_dummy$loglatestPrice)
+```
+#### Principle Component Analysis
+We will start by removing the independent variable and the economic data which we will ensure does not have multicolinearity later
+```{r}
+pca = subset(final_dummy, select = -c(loglatestPrice, TXNQGSP, gdp_3_month_lag, gdp_6_month_lag, Rate, unemployment_1_month_lag, unemployment_3_month_lag, unemployment_6_month_lag, MORTGAGE30US, mortgage_1_month_lag, mortgage_3_month_lag, mortgage_6_month_lag))
+svd_dummy= svd(as.matrix(scale(pca)))
+single_max = max(svd_dummy[[1]])
+single = svd_dummy[[1]]
+print(single)
+for (i in 1:length(single)) {
+  print(single_max/single[[i]])
+}
+
+```
+28 is largest score is below 30 we might want to handle it wait for meeting
+
+
+```{r}
+vsquared = svd_dummy[[3]]^2
+mu_k2 = 28.13438**2
+x = 0 
+for(j in 1:75){
+  numerator = (vsquared[j,75]) / (mu_k2)
+  sums = 0 
+  for(k1 in 1:75){
+    sums = sums + ((vsquared[j,k1]) /( svd_dummy[[1]][[k1]]**2))
+  }
+  x = sums + x
+  print(sums)
+}
+```
+
+
+#### Variance Inflation Factor numerical variables
+
+```{r}
+library(car)
+pca$loglatestPrice = final_dummy$loglatestPrice
+fit <- lm(loglatestPrice ~ ., data = as.data.frame(scale(pca)))
+vif_values <- car::vif(fit)
+vif_values
+```
+We will use a VIF of 8 and here are the list of variables with a VIF over 8 excluding economic terms which we will address later ZIP 78704, 78739, 78737, 78745, 78748, 78717, 78723, 78732, 78749, 78759.
+
+
+
+
+
+
+
+
+
+# Code Graveyard Anythig below this is in Davey Jones Locker and which means it is dead to us
+
+We see that the Garage spaces and Parking spaces have very high VIF over
+15 each therefore we will remove 1 of these features the remaining
+variables have significantly lower VIF scores we will remove the grage
+spaces and parking space, the economic data is highly correlated however
+that likely is just highly correlated with the lagging terms that were
+created therefore we will keep those columns and in our model we are
+only going to implement the 1 lagging term that best represents the data
+
+```{r, eval=FALSE}
+final_data_transform = subset(final_data_transform, select = -garageSpaces)
+numerical_cols <- numerical_cols[numerical_cols != "garageSpaces"] 
+```
+
+```{r, eval=FALSE}
+fit <- lm(latestPrice ~ ., data = final_data_transform[, numerical_cols])
+vif_values <- car::vif(fit)
+vif_values
+```
+#### Correlation of numerical variables
+```{r, eval=FALSE}
+#View(cor(final_data_transform[,numerical_cols]))
+```
+number of parking features and parking spaces, remove parking features,
+Year built living area sqft, proceed with caution,
+We will combine lotsize and living area 
+need to address living area sq ft
+We will create a variable that represents the sum of number of all schools
+We will keep avgSchool rating and drop median student teacher and school size
+figure out how to combine number of bathrooms, number of bedrooms and number of stories
+deal with correlation of economic factors 
+#### Cramesrs V test for Logical Variable and categorical variables
+
+```{r, eval=FALSE}
+facto_final = final_data_transform
+facto_final$hasAssociation <- factor(final_data_transform$hasAssociation)
+facto_final$hasCooling <- factor(final_data_transform$hasCooling)
+facto_final$hasGarage <- factor(final_data_transform$hasGarage)
+facto_final$hasHeating <- factor(final_data_transform$hasHeating)
+facto_final$hasSpa <- factor(final_data_transform$hasSpa)
+facto_final$hasView <- factor(final_data_transform$hasView)
+facto_final$zipcode <- factor(final_data_transform$zipcode)
+facto_final$city <- factor(final_data_transform$city)
+
+```
+
+```{r, eval=FALSE}
+library(DescTools)
+cramer_matrix <- sapply(append(logical_cols, categorical_cols) , function(x) {
+  sapply(append(logical_cols, categorical_cols), function(y) CramerV(facto_final[[x]], facto_final[[y]]))
+})
+print(cramer_matrix)
+
+```
+
+The two variables that are highly correlated are $hasHeating$ and $hasCooling$ we are going to drop $hasHeating$ because heating is lessimportant than cooling in texas and there are only about 100 houses that do not have heating. $Zipcode$ and $city$ have a similar issue we are going to drop $city$ because it does not provide much information since most of the city variables are just asutin there is also a higher likelyhood that in zillow the city is listed incorrectly compared to the xip code as people would just put austin as thecity even if they live in a suburb like manor. $zipcode$ is also highly correlated with $hasAssociation$ therefore we are going to group them together, as they both could provide useful information and we dont want to drop both.
+
+```{r, eval=FALSE}
+final_data_transform = subset(final_data_transform, select = -c(hasHeating, city))
+logical_cols <- logical_cols[logical_cols != "hasHeating"] 
+categorical_cols <- categorical_cols[categorical_cols != "city"] 
+```
+
+```{r, eval=FALSE}
+cramer_matrix <- sapply(append(logical_cols, categorical_cols) , function(x) {
+  sapply(append(logical_cols, categorical_cols), function(y) CramerV(facto_final[[x]], facto_final[[y]]))
+})
+print(cramer_matrix)
+```
+
+
+VIF for categorical and logical variables
+
+#### Numerical and categorical and logical
+
+```{r, eval=FALSE}
+anova_result <- aov(numerical_var ~ categorical_var, data = final_data)
+summary(anova_result)
+```
+
+
+```{r, eval=FALSE}
+final_data
+```
+
+```{r}
+facto_final = final_data_transform
+facto_final$latest_salemonth <- factor(final_data_transform$latest_salemonth, levels = 1:12)
+facto_final$hasAssociation <- factor(final_data_transform$zipAsso)
+facto_final$hasCooling <- factor(final_data_transform$hasCooling)
+facto_final$hasGarage <- factor(final_data_transform$hasGarage)
+facto_final$hasHeating <- factor(final_data_transform$hasHeating)
+facto_final$hasSpa <- factor(final_data_transform$hasSpa)
+facto_final$hasView <- factor(final_data_transform$hasView)
+facto_final$zipcode <- factor(final_data_transform$zipcode)
+
+# Convert factor columns to dummy variables
+dummy_vars <- model.matrix(~ hasAssociation + hasCooling + hasGarage+ latest_salemonth + hasHeating + hasSpa + hasView + zipcode - 1, data = facto_final)
+
+# Combine the dummy variables with the original data
+final_dummy <- cbind(final_data_transform, dummy_vars)
+
+final_dummy <- subset(final_dummy, select = -c(hasAssociation, hasAssociationFALSE, hasCooling, hasGarage, latest_salemonth, hasHeating, hasSpa, hasView, zipcode))
+```
