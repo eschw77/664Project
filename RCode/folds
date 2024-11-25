@@ -1,0 +1,32 @@
+```{r}
+# 90/10 data
+library(readr)
+data = read_csv("final_data_tranform_clean.csv")
+
+set.seed(664)
+
+shuffleddata = data[sample(nrow(data)), ]
+
+# Calculate the index for the 90-10 split
+index90 = floor(0.9 * nrow(shuffleddata))
+
+train = shuffleddata[1:index90,]
+
+# Create the 10% testing data
+test = shuffleddata[(index90 + 1):nrow(shuffleddata),]
+
+#of the 90 data, 7 fold cross validation
+
+
+library(caret)
+
+
+folds = createFolds(train$loglatestPrice, k = 7, list = TRUE)
+
+
+
+
+
+
+
+```
