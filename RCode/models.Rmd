@@ -1,0 +1,157 @@
+
+
+
+```{r}
+# 90/10 data
+library(readr)
+data = read_csv("final_data_tranform_clean.csv")
+
+set.seed(664)
+
+shuffleddata = data[sample(nrow(data)), ]
+
+# Calculate the index for the 90-10 split
+index90 = floor(0.9 * nrow(shuffleddata))
+
+train = shuffleddata[1:index90,]
+
+# Create the 10% testing data
+test = shuffleddata[(index90 + 1):nrow(shuffleddata),]
+
+#of the 90 data, 7 fold cross validation
+
+#size of folds
+# size7 = index90/7
+# 
+# index1 = floor(size7 * nrow(train))
+# index2 = floor(size7*2 * nrow(train))
+# index3 = floor(size7*3 * nrow(train))
+# index4 = floor(size7*4 * nrow(train))
+# index5 = floor(size7*5 * nrow(train))
+# index6 = floor(size7*6 * nrow(train))
+# 
+# 
+# 
+# fold1 = train[1:index1,]
+# fold2 = train[index1 + 1:index2,]
+# fold3 = train[index2 + 1:index3,]
+# fold4 = train[index3 + 1:index4,]
+# fold5 = train[index4 + 1:index5,]
+# fold6 = train[index5 + 1:index6,]
+# fold7 = train[index6 + 1:index90,]
+
+library(caret)
+
+
+folds = createFolds(train$loglatestPrice, k = 7, list = TRUE)
+
+
+
+
+
+
+
+```
+
+```{r}
+#AIC BIC
+
+library(leaps)
+
+
+
+
+
+MSE.bic = vector()
+bic.num = vector()
+MSE.aic = vector()
+
+for (j in 1:7) {
+
+  #setting respective fold to either training or testing
+  train_data = train[-folds[[j]], ]
+  test_data = train[folds[[j]], ]
+  
+  #doing best subset selection on our data
+  regfit.train = regsubsets(loglatestPrice ~ ., data = train_data,  method= "backward" )
+  reg.summary = summary(regfit.train)
+  
+  #via aic or bic, selecting which subset is the best, specifically selecting how many variables it has 
+  bic.number = which.min(reg.summary$bic)
+  bic.num[j] = bic.number
+  #aic.number = which.min(reg.summary$aic)
+  
+  
+  #creating the model with the respective number of coefficents
+  bic.mdl = coef(regfit.train, bic.number)
+  #aic.mdl = coef(regfit.train, aic.number)
+  
+  # testing the models that are created
+  test.mat2 = model.matrix(loglatestPrice ~ ., data = test_data)
+  bic.pred = test.mat2[, names(bic.mdl)] %*% bic.mdl
+  #aic.pred = test.mat2[, names(aic.mdl)] %*% aic.mdl
+
+  #computing the MSE for each model
+  MSE.bic[j] = mean(( test_data$loglatestPrice - bic.pred)**2)
+  #MSE.aic[j] = mean (( test_data$Y - aic.pred)**2)
+}
+
+
+paste( "Estimated MSE for BIC is ", sum(MSE.bic))
+
+paste(  "Estimated MSE for AIC is "  ,sum(MSE.aic))
+ 
+bic.num
+
+
+```
+
+
+BIC says model with ___ variables, AIC says model with ___ variables
+
+
+```{r}
+##lasso
+
+
+library(glmnet)
+
+
+
+set.seed(1234)
+
+
+for (j in 1:7) {
+  j = 1 
+  
+  x = model.matrix(Y ~ ., gendata)[, -1]
+y = gendata$Y
+xtrain = x[1:400,]
+xtest = x[401:500,]
+ytrain = y[1:400]
+ytest = y[401:500]
+grid = 10ˆseq(10, -2, length = 100)
+lasso.mod.cv <- cv.glmnet(xtrain, ytrain, alpha = 1, lambda = grid, nfolds = 5)
+plot(lasso.mod.cv)
+
+
+bestlambda = lasso.mod.cv$lambda.min
+bestlambda
+
+
+lasso.fulldata <- glmnet(xtrain, ytrain, alpha = 1, lambda = grid)
+lasso.coef <- predict(lasso.fulldata , type = "coefficients",s = bestlambda)
+lasso.coef
+
+
+lasso.predict = predict(lasso.fulldata, s = bestlambda, newx = xtest)
+mse.lasso = mean((ytest - lasso.predict)ˆ2)
+mse.lasso
+  
+  
+  
+}
+
+
+```
+
