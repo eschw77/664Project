@@ -9,7 +9,7 @@ data = read_csv("final_data_tranform_clean.csv")
 
 set.seed(664)
 
-data = select(data, -c(6, 8,9, 12,  13))
+data = select(data, -c(4,6, 8,9, 10, 12,  13, ))
 
 shuffleddata = data[sample(nrow(data)), ]
 
@@ -130,10 +130,10 @@ for (j in 1:7) {
   train_data = train[-folds[[j]], ]
   test_data = train[folds[[j]], ]
   
-  train_data_x = as.matrix(train_data[,-9]) # double check this indexes loglatestprice
-  train_data_y = as.matrix(train_data[, 9])
-  test_data_x = as.matrix(test_data[,-9])
-  test_data_y = as.matrix(test_data[, 9])
+   train_data_x = as.matrix(train_data[,-7])
+  train_data_y = as.matrix(train_data[, 7])
+  test_data_x = as.matrix(test_data[,-7])
+  test_data_y = as.matrix(test_data[, 7])
   
   grid = 10^seq(10, -2, length = 100)
   
@@ -172,10 +172,10 @@ for (j in 1:7) {
   train_data = train[-folds[[j]], ]
   test_data = train[folds[[j]], ]
   
-  train_data_x = as.matrix(train_data[,-9])
-  train_data_y = as.matrix(train_data[, 9])
-  test_data_x = as.matrix(test_data[,-9])
-  test_data_y = as.matrix(test_data[, 9])
+  train_data_x = as.matrix(train_data[,-7])
+  train_data_y = as.matrix(train_data[, 7])
+  test_data_x = as.matrix(test_data[,-7])
+  test_data_y = as.matrix(test_data[, 7])
   
   grid = 10^seq(10, -2, length = 100)
   
@@ -209,10 +209,10 @@ mean(vectorMSEridge)
 
 
   
-  train_data_x = as.matrix(train[,-9])
-  train_data_y = as.matrix(train[, 9])
-  test_data_x = as.matrix(test[,-9])
-  test_data_y = as.matrix(test[, 9])
+  train_data_x = as.matrix(train[,-7])
+  train_data_y = as.matrix(train[, 7])
+  test_data_x = as.matrix(test[,-7])
+  test_data_y = as.matrix(test[, 7])
   
   grid = 10^seq(10, -2, length = 100)
   
