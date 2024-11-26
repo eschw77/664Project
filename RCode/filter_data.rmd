@@ -5,6 +5,8 @@
 library(readr)
 library(dplyr)
 library(tidyverse)
+library(lubridate)
+
 austinhouse = read.csv("/Users/evanschwartz/664Project/Data/austinHousingData.csv")
 austinhouse2 = select(austinhouse, -3, -5,-24, -26, -32, -33 , -47) #removes desired columns
 austinhouse3 = filter(austinhouse2, homeType == "Single Family") #filters to only single family homes
@@ -15,6 +17,41 @@ austinhouse3
 
 # Merging The Economic data
 
+Load the Data
+
 ```{r}
+mort <- read.csv("/Users/evanschwartz/664Project/Data/MORTGAGE30US.csv")
+mortlag <- read.csv("/Users/evanschwartz/664Project/Data/MORTGAGE30US_with_laggard.csv")
+texasGDP <- read.csv("/Users/evanschwartz/664Project/Data/Texas_QGDP.csv")
+trav <- read.csv("/Users/evanschwartz/664Project/Data/TravData.csv")
+travlag <- read.csv("/Users/evanschwartz/664Project/Data/TravDataLag.csv")
+unemplag <- read.csv("/Users/evanschwartz/664Project/Data/Unemployment_rate_with_laggard.csv")
+
+
+trav[4,4] <- trav[3,4]
+```
+
+Here we need to fix consistency issues with one of the data files
+
+```{r}
+#fix unemplag to use the correct formatting for date 
+unemplag <- unemplag %>% rename(DATE = Month.Year)
+unemplag$DATE <- as.Date(paste0("01-", unemplag$DATE), format = "%d-%b-%Y")
+unemplag <- unemplag[-3]
+```
+
+Here we merge the Data, which often deals with different time horizons
+
+```{r}
+mort$DATE <- as.Date(mort$DATE)
+mortlag$DATE <- as.Date(mortlag$DATE)
+
+# Shift the DATE in mortlag forward by 6 months
+mortlag <- mortlag %>%
+  mutate(DATE = DATE %m+% months(7) + days(3))
+
+# Merge the main and lagged data frames
+mort_combined <- mort %>%
+  left_join(mortlag, by = "DATE", suffix = c("_main", "_lagged"))
 
 ```

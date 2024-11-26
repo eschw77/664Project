@@ -1,0 +1,310 @@
+---
+title: "Model Results"
+author: "Evan Schwartz"
+date: "2024-11-14"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Loading data and Libraries
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(caret)
+library(leaps)
+library(glmnet)
+library(dplyr)
+library(MASS)
+library(ggplot2)
+library(lattice)
+
+data = read_csv("/Users/evanschwartz/664Project/Data/final_data_tranform_clean.csv", show_col_types = FALSE)
+
+#Last Minute data cleaning, some economic vairables removed due to high collinearity 
+data = dplyr::select(data2, -c(1,4,6, 8,9, 10, 12, 13))
+```
+
+# K-folds for data
+
+Here we prepare the training data by shuffling and preforming a 90%-10%
+training-test split.
+
+```{r}
+# 90/10 data
+set.seed(664)
+
+shuffleddata = data[sample(nrow(data)), ]
+
+# Calculate the index for the 90-10 split
+index90 = floor(0.9 * nrow(shuffleddata))
+
+train = shuffleddata[1:index90,]
+
+# Create the 10% testing data
+test = shuffleddata[(index90 + 1):nrow(shuffleddata),]
+
+#of the 90 data, 7 fold cross validation
+
+folds = createFolds(train$loglatestPrice, k = 7, list = TRUE)
+```
+
+# AIC and BIC
+
+```{r}
+MSE.bic = vector()
+bic.num = vector()
+MSE.aic = vector()
+aic.num = vector()
+
+for (j in 1:7) {
+  #setting respective fold to either training or testing
+  train_data = train[-folds[[j]], ] #eliminate columns in testing data
+  test_data = train[folds[[j]], ]
+  
+  #doing best subset selection on our data
+  regfit.train = regsubsets(loglatestPrice ~ ., data = train_data,  method= "backward" )
+  reg.summary = summary(regfit.train)
+  
+  #selecting which subset is the best, specifically selecting how many variables it has 
+  bic.number = which.min(reg.summary$bic)
+  bic.num[j] = bic.number
+
+  #creating the model with the respective number of coefficents
+  bic.mdl = coef(regfit.train, bic.number)
+  
+  # testing the models that are created
+  test.mat2 = model.matrix(loglatestPrice ~ ., data = test_data)
+  bic.pred = test.mat2[, names(bic.mdl)] %*% bic.mdl
+  
+  
+  # Start with the full model
+  full.model = lm(loglatestPrice ~ ., data = train_data)
+  
+  # Perform backward stepwise selection using AIC
+  stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
+
+  #predict with the 
+  aic.pred <- predict(stepwise.model, newdata = test_data)
+  aic.num[j] <- length(coef(stepwise.model))
+
+
+  #computing the MSE for each model
+  MSE.bic[j] = mean(( test_data$loglatestPrice - bic.pred)**2)
+  MSE.aic[j] = mean((test_data$loglatestPrice - aic.pred)**2)
+  print(j)
+}
+
+paste("Estimated MSE for BIC is ", sum(MSE.bic))
+paste("Estimated MSE for AIC is ", sum(MSE.aic))
+ 
+bic.num
+```
+
+BIC says model with \_\_\_ variables, AIC says model with \_\_\_
+variables
+
+# LASSO & Ridge
+
+## LASSO
+
+```{r}
+set.seed(1234)
+
+vectorMSElasso = vector()
+for (j in 1:7) {
+  
+  
+  train_data = train[-folds[[j]], ]
+  test_data = train[folds[[j]], ]
+  
+  train_data_x = as.matrix(train_data[,-7])
+  train_data_y = as.matrix(train_data[, 7])
+  test_data_x = as.matrix(test_data[,-7])
+  test_data_y = as.matrix(test_data[, 7])
+  
+  grid = 10^seq(10, -2, length = 100)
+  
+  lasso.mod.cv = cv.glmnet(train_data_x, train_data_y, alpha = 1, lambda = grid, nfolds = 5)
+  
+  bestlambda = lasso.mod.cv$lambda.min
+  
+  lasso.fulldata = glmnet(train_data_x, train_data_y, alpha = 1, lambda = grid)
+  lasso.coef = predict(lasso.fulldata , type = "coefficients",s = bestlambda)
+  
+  lasso.predict = predict(lasso.fulldata, s = bestlambda, newx = test_data_x)
+  mse.lasso = mean((test_data_y - lasso.predict)^2)
+  vectorMSElasso[j] = mse.lasso
+}
+
+mean(vectorMSElasso)
+```
+
+## Ridge
+
+```{r}
+set.seed(1234)
+
+vectorMSEridge = vector()
+for (j in 1:7) {
+  
+  
+  train_data = train[-folds[[j]], ]
+  test_data = train[folds[[j]], ]
+  
+  train_data_x = as.matrix(train_data[,-7])
+  train_data_y = as.matrix(train_data[, 7])
+  test_data_x = as.matrix(test_data[,-7])
+  test_data_y = as.matrix(test_data[, 7])
+  
+  grid = 10^seq(10, -2, length = 100)
+  
+  lasso.mod.cv = cv.glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid, nfolds = 5)
+  
+  bestlambda = lasso.mod.cv$lambda.min
+  
+  lasso.fulldata = glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid)
+  lasso.coef = predict(lasso.fulldata , type = "coefficients",s = bestlambda)
+  
+  lasso.predict = predict(lasso.fulldata, s = bestlambda, newx = test_data_x)
+  mse.lasso = mean((test_data_y - lasso.predict)^2)
+  vectorMSEridge[j] = mse.lasso
+}
+mean(vectorMSEridge)
+```
+
+```{r}
+#lowest mean squared error was Ridge, so we will run this over entire training dataset
+train_data_x = as.matrix(train[,-7])
+train_data_y = as.matrix(train[, 7])
+test_data_x = as.matrix(test[,-7])
+test_data_y = as.matrix(test[, 7])
+  
+grid = 10^seq(10, -2, length = 100)
+  
+ridge.mod.cv = cv.glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid, nfolds = 5)
+
+
+bestlambda = ridge.mod.cv$lambda.min
+
+
+lasso.fulldata = glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid)
+ridge.coef = predict(lasso.fulldata , type = "coefficients",s = bestlambda)
+
+
+ridge.predict = predict(lasso.fulldata, s = bestlambda, newx = test_data_x)
+mse.ridge = mean((test_data_y - ridge.predict)^2)
+paste("mean squared error on test data for ridge is ", mse.ridge)
+
+
+paste("best lambda for ridge is ", bestlambda)
+```
+
+# The Optimal model
+
+Using our various models we produced the opitmal model by selecting the
+parameters ridge identified as the most valuable. We use a number of
+thresholds for eliminating variables and identify the elbow at which the
+reduction in MSE becomes negligible.
+
+```{r}
+thresholds = seq(1.0e-01, 4.0e-01, length.out = 50)  # 20 values between 0.1 and 0.4
+mse_values = c(length(thresholds))
+num_non_zero_coefs = c(length(thresholds))  # Vector to store number of non-zero coefficients
+
+# Loop over thresholds and calculate MSE for each using normal linear regression
+for (i in 1:length(thresholds)) {
+  # Apply thresholding: set coefficients below threshold to 0
+  coef_thresholded = ridge.coef
+  coef_thresholded[abs(coef_thresholded) < thresholds[i]] = 0
+  
+  # Create new design matrix with selected predictors (non-zero coefficients)
+  selected_predictors = which(coef_thresholded != 0)
+  num_non_zero_coefs[i] = length(selected_predictors)  # Count the number of non-zero coefficients
+  
+  if (length(selected_predictors) > 0) {
+    reduced_train_data_x = train[, selected_predictors]
+    reduced_test_data_x = test[, selected_predictors]
+    
+    # Convert reduced matrices to data frames
+    reduced_train_data_x_df = data.frame(reduced_train_data_x)
+    reduced_test_data_x_df = data.frame(reduced_test_data_x)
+    
+    # Fit the normal linear regression model with the reduced set of predictors
+    lm.model = lm(train_data_y ~ ., data = reduced_train_data_x_df)
+    
+    # Predict on test data
+    lm.predict = predict(lm.model, newdata = reduced_test_data_x_df)
+    
+    # Compute the MSE for the reduced model
+    mse_values[i] = mean((test_data_y - lm.predict)^2)
+  } else {
+    mse_values[i] = NA  # No predictors selected, can't compute MSE
+  }
+}
+
+# Adjust margins to create more space for the second y-axis label
+par(mar = c(5, 4, 4, 6))  # Increase the space on the right side (last value)
+
+# Plot MSE and number of non-zero predictors on the same plot with dual y-axes
+plot(thresholds, mse_values, type = "l", col = "blue", 
+     xlab = "Threshold (Coefficient Magnitude)", 
+     ylab = "Mean Squared Error", 
+     main = "MSE and Number of Non-Zero Predictors vs. Threshold")
+
+# Add the second y-axis for the number of non-zero predictors
+par(new = TRUE)
+plot(thresholds, num_non_zero_coefs, type = "l", col = "red", 
+     axes = FALSE, xlab = "", ylab = "")
+
+# Add the second y-axis on the right
+axis(side = 4)
+
+# Add the label for the second y-axis
+mtext("Number of Non-Zero Predictors", side = 4, line = 3)
+
+# Reset to single plot view
+par(mfrow = c(1, 1))
+
+
+#via analyzing the graph we get the following optimal threshold
+opt.threshold = NULL
+opt.threshold.num = NULL
+
+# Loop through the MSE values and find the threshold just before MSE exceeds 0.1
+for (i in 2:length(mse_values)) {
+  if (mse_values[i] > 0.1 && mse_values[i - 1] <= 0.1) {
+    opt.threshold = thresholds[i - 1]
+    opt.threshold.num = i-1
+    break  # Stop the loop once we find the threshold before the jump
+  }
+}
+
+# Print the threshold just before MSE exceeds 0.1
+paste('The optimal threshold is about', opt.threshold, 'at index', opt.threshold.num)
+```
+
+Analyzing the results from the vector
+
+# Comparison with Naive Model
+
+As noted in our report we now consider a model based on what some
+relevant field experts consider to be the main features most buyers use
+when valuing houses.
+
+```{r}
+data.naive <- dplyr::select(data, c(1, 2, 3, 6, 7, 9,10, 28:59, 70:77,))
+
+lm.model.naive = lm(loglatestPrice ~ ., data = data.naive)
+
+naive.predictions <- predict(lm.model.naive, newdata = data.naive)
+
+mse.naive <- mean((data.naive$loglatestPrice - naive.predictions)^2)
+
+paste('Our coefficients form a linear model with MSE', mse_values[15], 'and the naive model produces MSE',mse.naive,'. We may thus conclude our reduced model is far better at predicting house prices.')
+```
