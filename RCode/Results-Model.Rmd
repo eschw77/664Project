@@ -1,6 +1,6 @@
 ---
 title: "Model Results"
-author: "Evan Schwartz"
+author: "Evan Schwartz, Ethan Wood, Max Van Fleet"
 date: "2024-11-14"
 output: html_document
 editor_options: 
@@ -40,14 +40,17 @@ training-test split.
 set.seed(664)
 
 shuffleddata = data[sample(nrow(data)), ]
+data_naive_shuff <- dplyr::select(shuffleddata, c(1, 2, 3, 6, 7,10, 28:59, 70:77,))
+
 
 # Calculate the index for the 90-10 split
 index90 = floor(0.9 * nrow(shuffleddata))
 
 train = shuffleddata[1:index90,]
-
+train_naive = data_naive_shuff[1:index90,]
 # Create the 10% testing data
 test = shuffleddata[(index90 + 1):nrow(shuffleddata),]
+test_naive = data_naive_shuff[(index90 + 1):nrow(data_naive_shuff),]
 
 #of the 90 data, 7 fold cross validation
 
@@ -213,7 +216,7 @@ thresholds for eliminating variables and identify the elbow at which the
 reduction in MSE becomes negligible.
 
 ```{r}
-thresholds = seq(1.0e-01, 4.0e-01, length.out = 50)  # 20 values between 0.1 and 0.4
+thresholds = seq(1.0e-01, 4.0e-01, length.out = 50)  
 mse_values = c(length(thresholds))
 num_non_zero_coefs = c(length(thresholds))  # Vector to store number of non-zero coefficients
 
@@ -223,9 +226,9 @@ for (i in 1:length(thresholds)) {
   coef_thresholded = ridge.coef
   coef_thresholded[abs(coef_thresholded) < thresholds[i]] = 0
   
-  # Create new design matrix with selected predictors (non-zero coefficients)
+  #remove zero paramters and make var to count number of non-zero coeffs 
   selected_predictors = which(coef_thresholded != 0)
-  num_non_zero_coefs[i] = length(selected_predictors)  # Count the number of non-zero coefficients
+  num_non_zero_coefs[i] = length(selected_predictors)  
   
   if (length(selected_predictors) > 0) {
     reduced_train_data_x = train[, selected_predictors]
@@ -238,18 +241,16 @@ for (i in 1:length(thresholds)) {
     # Fit the normal linear regression model with the reduced set of predictors
     lm.model = lm(train_data_y ~ ., data = reduced_train_data_x_df)
     
-    # Predict on test data
     lm.predict = predict(lm.model, newdata = reduced_test_data_x_df)
     
-    # Compute the MSE for the reduced model
     mse_values[i] = mean((test_data_y - lm.predict)^2)
   } else {
-    mse_values[i] = NA  # No predictors selected, can't compute MSE
+    mse_values[i] = NA  # No predictors selected, threshold choosen so this shouldn't occur
   }
 }
 
 # Adjust margins to create more space for the second y-axis label
-par(mar = c(5, 4, 4, 6))  # Increase the space on the right side (last value)
+par(mar = c(5, 4, 4, 6)) 
 
 # Plot MSE and number of non-zero predictors on the same plot with dual y-axes
 plot(thresholds, mse_values, type = "l", col = "blue", 
@@ -262,13 +263,10 @@ par(new = TRUE)
 plot(thresholds, num_non_zero_coefs, type = "l", col = "red", 
      axes = FALSE, xlab = "", ylab = "")
 
-# Add the second y-axis on the right
+#label to right
 axis(side = 4)
-
-# Add the label for the second y-axis
 mtext("Number of Non-Zero Predictors", side = 4, line = 3)
 
-# Reset to single plot view
 par(mfrow = c(1, 1))
 
 
@@ -279,14 +277,14 @@ opt.threshold.num = NULL
 # Loop through the MSE values and find the threshold just before MSE exceeds 0.1
 for (i in 2:length(mse_values)) {
   if (mse_values[i] > 0.1 && mse_values[i - 1] <= 0.1) {
-    opt.threshold = thresholds[i - 1]
-    opt.threshold.num = i-1
-    break  # Stop the loop once we find the threshold before the jump
+    opt_threshold = thresholds[i - 1]
+    opt_threshold_num = i-1
+    break  
   }
 }
 
 # Print the threshold just before MSE exceeds 0.1
-paste('The optimal threshold is about', opt.threshold, 'at index', opt.threshold.num)
+paste('We thus having that by finding the elbow joint, the optimal threshold is about', opt_threshold, 'at index', opt_threshold_num, '. It contains',num_non_zero_coefs[opt_threshold_num], 'non-zero coefficients.' )
 ```
 
 Analyzing the results from the vector
@@ -298,13 +296,54 @@ relevant field experts consider to be the main features most buyers use
 when valuing houses.
 
 ```{r}
-data.naive <- dplyr::select(data, c(1, 2, 3, 6, 7, 9,10, 28:59, 70:77,))
+# Fit the normal linear regression model for naive data 
+lm_model_naive = lm(train_naive$loglatestPrice ~ ., data = train_naive)
 
-lm.model.naive = lm(loglatestPrice ~ ., data = data.naive)
+naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
-naive.predictions <- predict(lm.model.naive, newdata = data.naive)
+mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
 
-mse.naive <- mean((data.naive$loglatestPrice - naive.predictions)^2)
+paste('Our coefficients form a linear model with MSE', mse_values[15], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our reduced model is better at predicting house prices.')
+```
 
-paste('Our coefficients form a linear model with MSE', mse_values[15], 'and the naive model produces MSE',mse.naive,'. We may thus conclude our reduced model is far better at predicting house prices.')
+## Residual Plots
+
+```{r}
+# Residual plot for the naive model
+par(mfrow = c(1, 2))  # Set up two plots side by side
+
+plot(naive_predictions, test_naive$loglatestPrice - naive_predictions, 
+     main = "Residuals for Naive Model", 
+     xlab = "Predicted Values", 
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+
+
+# Fit the optimal model
+coef_thresholded = ridge.coef
+coef_thresholded[abs(coef_thresholded) < thresholds[15]] = 0
+  
+selected_predictors = which(coef_thresholded != 0)
+
+reduced_train_data_x = train[, selected_predictors]
+reduced_test_data_x = test[, selected_predictors]
+    
+reduced_train_data_x_df = data.frame(reduced_train_data_x)
+reduced_test_data_x_df = data.frame(reduced_test_data_x)
+
+lm_model_optimal = lm(train_data_y ~ ., data = reduced_train_data_x_df)
+
+summary(lm_model_optimal)
+
+optimal_predictions = predict(lm_model_optimal, newdata = reduced_test_data_x_df)
+
+# Plot residuals for the optimal model
+plot(optimal_predictions, test_data_y - optimal_predictions, 
+     main = "Residuals for Optimal Model", 
+     xlab = "Predicted Values", 
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+
+# Reset the plot layout
+par(mfrow = c(1, 1))
 ```
