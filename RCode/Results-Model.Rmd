@@ -27,7 +27,7 @@ library(lattice)
 data = read_csv("/Users/evanschwartz/664Project/Data/final_data_tranform_clean.csv", show_col_types = FALSE)
 
 #Last Minute data cleaning, some economic vairables removed due to high collinearity 
-data = dplyr::select(data2, -c(1,4,6, 8,9, 10, 12, 13))
+data = dplyr::select(data, -c(1,4,6, 8,9, 10, 12, 13))
 ```
 
 # K-folds for data
@@ -216,75 +216,86 @@ thresholds for eliminating variables and identify the elbow at which the
 reduction in MSE becomes negligible.
 
 ```{r}
-thresholds = seq(1.0e-01, 4.0e-01, length.out = 50)  
+thresholds = seq(1.0e-07,5.0e-01, length.out = 100)  
 mse_values = c(length(thresholds))
 num_non_zero_coefs = c(length(thresholds))  # Vector to store number of non-zero coefficients
 
 # Loop over thresholds and calculate MSE for each using normal linear regression
 for (i in 1:length(thresholds)) {
-  # Apply thresholding: set coefficients below threshold to 0
-  coef_thresholded = ridge.coef
+  # Extract coefficients, excluding the intercept
+  ridge.coef = coef(lasso.fulldata, s = bestlambda)
+  coef_thresholded = as.numeric(ridge.coef[-1])  # Remove intercept
+  
+  # Apply thresholding
   coef_thresholded[abs(coef_thresholded) < thresholds[i]] = 0
   
-  #remove zero paramters and make var to count number of non-zero coeffs 
+  # Identify selected predictors
   selected_predictors = which(coef_thresholded != 0)
   num_non_zero_coefs[i] = length(selected_predictors)  
   
   if (length(selected_predictors) > 0) {
-    reduced_train_data_x = train[, selected_predictors]
-    reduced_test_data_x = test[, selected_predictors]
+    # Subset training and test data matrices
+    reduced_train_data_x = train_data_x[, selected_predictors, drop = FALSE]
+    reduced_test_data_x = test_data_x[, selected_predictors, drop = FALSE]
     
-    # Convert reduced matrices to data frames
-    reduced_train_data_x_df = data.frame(reduced_train_data_x)
-    reduced_test_data_x_df = data.frame(reduced_test_data_x)
+    # Convert to data frames for lm()
+    reduced_train_data_x_df = as.data.frame(reduced_train_data_x)
+    reduced_test_data_x_df = as.data.frame(reduced_test_data_x)
     
-    # Fit the normal linear regression model with the reduced set of predictors
+    # Fit linear regression model
     lm.model = lm(train_data_y ~ ., data = reduced_train_data_x_df)
-    
     lm.predict = predict(lm.model, newdata = reduced_test_data_x_df)
     
+    # Compute MSE
     mse_values[i] = mean((test_data_y - lm.predict)^2)
   } else {
-    mse_values[i] = NA  # No predictors selected, threshold choosen so this shouldn't occur
+    mse_values[i] = NA  # No predictors selected
   }
 }
-
-# Adjust margins to create more space for the second y-axis label
-par(mar = c(5, 4, 4, 6)) 
-
-# Plot MSE and number of non-zero predictors on the same plot with dual y-axes
-plot(thresholds, mse_values, type = "l", col = "blue", 
-     xlab = "Threshold (Coefficient Magnitude)", 
-     ylab = "Mean Squared Error", 
-     main = "MSE and Number of Non-Zero Predictors vs. Threshold")
-
-# Add the second y-axis for the number of non-zero predictors
-par(new = TRUE)
-plot(thresholds, num_non_zero_coefs, type = "l", col = "red", 
-     axes = FALSE, xlab = "", ylab = "")
-
-#label to right
-axis(side = 4)
-mtext("Number of Non-Zero Predictors", side = 4, line = 3)
-
-par(mfrow = c(1, 1))
-
-
 #via analyzing the graph we get the following optimal threshold
 opt.threshold = NULL
 opt.threshold.num = NULL
 
-# Loop through the MSE values and find the threshold just before MSE exceeds 0.1
+# Loop through the MSE values and find the threshold just before MSE exceeds 0.2
 for (i in 2:length(mse_values)) {
-  if (mse_values[i] > 0.1 && mse_values[i - 1] <= 0.1) {
+  if (mse_values[i] > 0.205 && mse_values[i - 1] <= 0.205) {
     opt_threshold = thresholds[i - 1]
     opt_threshold_num = i-1
     break  
   }
 }
 
-# Print the threshold just before MSE exceeds 0.1
+# Print the threshold just before MSE exceeds 0.21
 paste('We thus having that by finding the elbow joint, the optimal threshold is about', opt_threshold, 'at index', opt_threshold_num, '. It contains',num_non_zero_coefs[opt_threshold_num], 'non-zero coefficients.' )
+
+# Adjust margins to create more space for the second y-axis label
+par(mar = c(5, 4, 4, 6)) 
+
+# Plot MSE and number of non-zero predictors on the same plot
+plot(thresholds, mse_values, type = "l", col = "blue", 
+     xlab = "Threshold (Coefficient Magnitude)", 
+     ylab = "Mean Squared Error", 
+     main = "MSE and Number of Non-Zero Predictors vs. Threshold")
+
+# Add a black dot at a specific index (e.g., opt_index)
+points(thresholds[opt_threshold_num], mse_values[opt_threshold_num], col = "black", pch = 16)  # pch = 16 is for filled circles
+
+
+# Add the second y-axis for the number of non-zero predictors
+par(new = TRUE)
+plot(thresholds, num_non_zero_coefs, type = "l", col = "red", 
+     axes = FALSE, xlab = "", ylab = "")
+
+# Label the right axis
+axis(side = 4)
+mtext("Number of Non-Zero Predictors", side = 4, line = 3)
+print(thresholds[opt_threshold_num])
+print(mse_values[opt_threshold_num])
+
+
+
+# Reset plot parameters
+par(mfrow = c(1, 1))
 ```
 
 Analyzing the results from the vector
@@ -303,7 +314,7 @@ naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
 
-paste('Our coefficients form a linear model with MSE', mse_values[15], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our reduced model is better at predicting house prices.')
+paste('Our coefficients form a linear model with MSE', mse_values[38], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our reduced model is better at predicting house prices.')
 ```
 
 ## Residual Plots
@@ -321,7 +332,7 @@ abline(h = 0, col = "red")
 
 # Fit the optimal model
 coef_thresholded = ridge.coef
-coef_thresholded[abs(coef_thresholded) < thresholds[15]] = 0
+coef_thresholded[abs(coef_thresholded) < thresholds[38]] = 0
   
 selected_predictors = which(coef_thresholded != 0)
 
