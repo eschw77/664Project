@@ -229,7 +229,7 @@ naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
 
-paste('Our coefficients form a linear model with MSE', mse_values[opt_threshold_num], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our the naive model may actually be superior.')
+paste('The naive model produces MSE',mse_naive,'. Ridge Produces an MSE of ', mse.ridge)
 ```
 
 ## Residual Plots
@@ -254,5 +254,31 @@ abline(h = 0, col = "red")
 
 # Reset the plot layout
 #par(mfrow = c(1, 1))
+```
+
+
+## Hypothesis Testing
+
+```{r}
+## coef of ridge model
+
+ridge.coef
+
+train_data_x = as.matrix(train[,-6])
+train_data_y = as.matrix(train[, 6])
+
+ones_column = matrix(1, nrow=nrow(train_data_x), ncol=1)
+train_data_x1 = cbind(ones_column, train_data_x)
+
+
+#n.tmp is number of observation
+#p.tmp is the number of variables, features, etc
+
+solve(t(train_data_x1) %*% train_data_x1 + nrow(train_data_x1) * bestlambda * diag(ncol(train_data_x1))) %*% t(train_data_x1) %*% train_data_y
+
+
+drop(solve(crossprod(train_data_x1) + diag( nrow(train_data_x1) * bestlambda, ncol(train_data_x1)), crossprod(train_data_x1, train_data_y)))
+
+
 ```
 
