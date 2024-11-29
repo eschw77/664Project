@@ -2,9 +2,11 @@
 title: "Model Results"
 author: "Evan Schwartz, Ethan Wood, Max Van Fleet"
 date: "2024-11-14"
-output: html_document
-editor_options: 
-  markdown: 
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
     wrap: 72
 ---
 
@@ -30,10 +32,7 @@ data = read_csv("/Users/evanschwartz/664Project/Data/final_data_tranform_clean.c
 data = dplyr::select(data, -c(1,4,6, 8,9, 10, 12, 13))
 ```
 
-# K-folds for data
-
-Here we prepare the training data by shuffling and preforming a 90%-10%
-training-test split.
+# K-folds for data=Here we prepare the training data by shuffling and preforming a 90%-10% training-test split.
 
 ```{r}
 # 90/10 data
@@ -90,21 +89,20 @@ for (j in 1:7) {
   full.model = lm(loglatestPrice ~ ., data = train_data)
   
   # Perform backward stepwise selection using AIC
-  stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
+  #stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
 
   #predict with the 
-  aic.pred <- predict(stepwise.model, newdata = test_data)
-  aic.num[j] <- length(coef(stepwise.model))
+  #aic.pred <- predict(stepwise.model, newdata = test_data)
+  #aic.num[j] <- length(coef(stepwise.model))
 
 
   #computing the MSE for each model
   MSE.bic[j] = mean(( test_data$loglatestPrice - bic.pred)**2)
-  MSE.aic[j] = mean((test_data$loglatestPrice - aic.pred)**2)
-  print(j)
+  #MSE.aic[j] = mean((test_data$loglatestPrice - aic.pred)**2)
 }
 
 paste("Estimated MSE for BIC is ", sum(MSE.bic))
-paste("Estimated MSE for AIC is ", sum(MSE.aic))
+#paste("Estimated MSE for AIC is ", sum(MSE.aic))
  
 bic.num
 ```
@@ -126,10 +124,10 @@ for (j in 1:7) {
   train_data = train[-folds[[j]], ]
   test_data = train[folds[[j]], ]
   
-  train_data_x = as.matrix(train_data[,-7])
-  train_data_y = as.matrix(train_data[, 7])
-  test_data_x = as.matrix(test_data[,-7])
-  test_data_y = as.matrix(test_data[, 7])
+  train_data_x = as.matrix(train_data[,-6])
+  train_data_y = as.matrix(train_data[, 6])
+  test_data_x = as.matrix(test_data[,-6])
+  test_data_y = as.matrix(test_data[, 6])
   
   grid = 10^seq(10, -2, length = 100)
   
@@ -160,10 +158,10 @@ for (j in 1:7) {
   train_data = train[-folds[[j]], ]
   test_data = train[folds[[j]], ]
   
-  train_data_x = as.matrix(train_data[,-7])
-  train_data_y = as.matrix(train_data[, 7])
-  test_data_x = as.matrix(test_data[,-7])
-  test_data_y = as.matrix(test_data[, 7])
+  train_data_x = as.matrix(train_data[,-6])
+  train_data_y = as.matrix(train_data[, 6])
+  test_data_x = as.matrix(test_data[,-6])
+  test_data_y = as.matrix(test_data[, 6])
   
   grid = 10^seq(10, -2, length = 100)
   
@@ -183,10 +181,10 @@ mean(vectorMSEridge)
 
 ```{r}
 #lowest mean squared error was Ridge, so we will run this over entire training dataset
-train_data_x = as.matrix(train[,-7])
-train_data_y = as.matrix(train[, 7])
-test_data_x = as.matrix(test[,-7])
-test_data_y = as.matrix(test[, 7])
+train_data_x = as.matrix(train[,-6])
+train_data_y = as.matrix(train[, 6])
+test_data_x = as.matrix(test[,-6])
+test_data_y = as.matrix(test[, 6])
   
 grid = 10^seq(10, -2, length = 100)
   
@@ -239,15 +237,21 @@ for (i in 1:length(thresholds)) {
     reduced_test_data_x = test_data_x[, selected_predictors, drop = FALSE]
     
     # Convert to data frames for lm()
-    reduced_train_data_x_df = as.data.frame(reduced_train_data_x)
-    reduced_test_data_x_df = as.data.frame(reduced_test_data_x)
+    reduced_train_data_x_df = cbind(as.data.frame(reduced_train_data_x), loglatestPrice = train_data_y)
+    reduced_test_data_x_df = cbind(as.data.frame(reduced_test_data_x), loglatestPrice = test_data_y)
+
+    #print(names(reduced_train_data_x_df))  # Should include 'loglatestPrice'
+
+    #print("BREAK BREAK BREAK ")
+    
+    #print(names(reduced_test_data_x_df))  # Should include 'loglatestPrice'
     
     # Fit linear regression model
-    lm.model = lm(train_data_y ~ ., data = reduced_train_data_x_df)
-    lm.predict = predict(lm.model, newdata = reduced_test_data_x_df)
+    lm.reduced = lm(loglatestPrice ~ ., data = reduced_train_data_x_df)
+    lm.predict = predict(lm.reduced, newdata = reduced_test_data_x_df)
     
     # Compute MSE
-    mse_values[i] = mean((test_data_y - lm.predict)^2)
+    mse_values[i] = mean((reduced_test_data_x_df$loglatestPrice - lm.predict)^2)
   } else {
     mse_values[i] = NA  # No predictors selected
   }
@@ -258,7 +262,7 @@ opt.threshold.num = NULL
 
 # Loop through the MSE values and find the threshold just before MSE exceeds 0.2
 for (i in 2:length(mse_values)) {
-  if (mse_values[i] > 0.205 && mse_values[i - 1] <= 0.205) {
+  if (mse_values[i] > 0.15 && mse_values[i - 1] <= 0.15) {
     opt_threshold = thresholds[i - 1]
     opt_threshold_num = i-1
     break  
@@ -314,7 +318,7 @@ naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
 
-paste('Our coefficients form a linear model with MSE', mse_values[38], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our reduced model is better at predicting house prices.')
+paste('Our coefficients form a linear model with MSE', mse_values[opt_threshold_num], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our the naive model may actually be superior.')
 ```
 
 ## Residual Plots
@@ -329,24 +333,28 @@ plot(naive_predictions, test_naive$loglatestPrice - naive_predictions,
      ylab = "Residuals")
 abline(h = 0, col = "red")
 
-
 # Fit the optimal model
 coef_thresholded = ridge.coef
-coef_thresholded[abs(coef_thresholded) < thresholds[38]] = 0
-  
-selected_predictors = which(coef_thresholded != 0)
+coef_thresholded = as.numeric(ridge.coef[-1])  # Remove intercept
 
-reduced_train_data_x = train[, selected_predictors]
-reduced_test_data_x = test[, selected_predictors]
+coef_thresholded[abs(coef_thresholded) < thresholds[opt_threshold_num]] = 0
+
+opt_predictors = which(coef_thresholded != 0)
+
+opt_reduced_train_data_x = train[, opt_predictors, drop = FALSE]
+opt_reduced_test_data_x = test[, opt_predictors, drop = FALSE]
     
-reduced_train_data_x_df = data.frame(reduced_train_data_x)
-reduced_test_data_x_df = data.frame(reduced_test_data_x)
+opt_reduced_train_data_x_df = cbind(as.data.frame(opt_reduced_train_data_x), loglatestPrice = train_data_y)
+opt_reduced_test_data_x_df = cbind(as.data.frame(opt_reduced_test_data_x), loglatestPrice = test_data_y)
 
-lm_model_optimal = lm(train_data_y ~ ., data = reduced_train_data_x_df)
+lm_model_optimal = lm(loglatestPrice ~ ., data = opt_reduced_train_data_x_df)
+opt_predictions = predict(lm_model_optimal, newdata = opt_reduced_test_data_x_df)
 
+paste("MSE: ", mean((opt_reduced_test_data_x_df$loglatestPrice - opt_predictions)^2))
 summary(lm_model_optimal)
 
-optimal_predictions = predict(lm_model_optimal, newdata = reduced_test_data_x_df)
+
+optimal_predictions = predict(lm_model_optimal, newdata = opt_reduced_test_data_x_df)
 
 # Plot residuals for the optimal model
 plot(optimal_predictions, test_data_y - optimal_predictions, 
@@ -357,4 +365,28 @@ abline(h = 0, col = "red")
 
 # Reset the plot layout
 par(mfrow = c(1, 1))
+```
+
+# Whole Regression Model 
+
+```{r}
+train_data_x_df = cbind(as.data.frame(train_data_x), loglatestPrice = train_data_y)
+test_data_x_df = cbind(as.data.frame(test_data_x), loglatestPrice = test_data_y)
+
+lm_model_whole = lm(loglatestPrice ~., data = train_data_x_df)
+
+predictions = predict(lm_model_whole, newdata = test_data_x_df)
+
+paste('MSE: ',mean((test_data_x_df$loglatestPrice - predictions)^2))
+
+
+summary(lm_model_whole)
+
+# Plot residuals for the optimal model
+plot(optimal_predictions, test_data_y - optimal_predictions, 
+     main = "Residuals for Whole Model", 
+     xlab = "Predicted Values", 
+     ylab = "Residuals")
+abline(h = 0, col = "red")
+
 ```
