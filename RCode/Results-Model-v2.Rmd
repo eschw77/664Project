@@ -25,7 +25,6 @@ library(dplyr)
 library(MASS)
 library(ggplot2)
 library(lattice)
-library(gridExtra)
 
 data = read_csv("/Users/evanschwartz/664Project/Data/final_data_tranform_clean.csv", show_col_types = FALSE)
 
@@ -180,6 +179,8 @@ for (j in 1:7) {
 mean(vectorMSEridge)
 ```
 
+# The Optimal model
+
 ```{r}
 #lowest mean squared error was Ridge, so we will run this over entire training dataset
 train_data_x = as.matrix(train[,-6])
@@ -190,7 +191,7 @@ test_data_y = as.matrix(test[, 6])
 grid = 10^seq(10, -2, length = 100)
   
 ridge.mod.cv = cv.glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid, nfolds = 5)
-
+plot(ridge.mod.cv, main = "MSE of Ridge with Respective Lambdas")
 
 bestlambda = ridge.mod.cv$lambda.min
 
@@ -205,104 +206,8 @@ paste("mean squared error on test data for ridge is ", mse.ridge)
 
 
 paste("best lambda for ridge is ", bestlambda)
-```
-
-# The Optimal model
-
-Using our various models we produced the opitmal model by selecting the
-parameters ridge identified as the most valuable. We use a number of
-thresholds for eliminating variables and identify the elbow at which the
-reduction in MSE becomes negligible.
-
-```{r}
-thresholds = seq(1.0e-07,5.0e-01, length.out = 100)  
-mse_values = c(length(thresholds))
-num_non_zero_coefs = c(length(thresholds))  # Vector to store number of non-zero coefficients
-
-# Loop over thresholds and calculate MSE for each using normal linear regression
-for (i in 1:length(thresholds)) {
-  # Extract coefficients, excluding the intercept
-  ridge.coef = coef(lasso.fulldata, s = bestlambda)
-  coef_thresholded = as.numeric(ridge.coef[-1])  # Remove intercept
-  
-  # Apply thresholding
-  coef_thresholded[abs(coef_thresholded) < thresholds[i]] = 0
-  
-  # Identify selected predictors
-  selected_predictors = which(coef_thresholded != 0)
-  num_non_zero_coefs[i] = length(selected_predictors)  
-  
-  if (length(selected_predictors) > 0) {
-    # Subset training and test data matrices
-    reduced_train_data_x = train_data_x[, selected_predictors, drop = FALSE]
-    reduced_test_data_x = test_data_x[, selected_predictors, drop = FALSE]
-    
-    # Convert to data frames for lm()
-    reduced_train_data_x_df = cbind(as.data.frame(reduced_train_data_x), loglatestPrice = train_data_y)
-    reduced_test_data_x_df = cbind(as.data.frame(reduced_test_data_x), loglatestPrice = test_data_y)
-
-    #print(names(reduced_train_data_x_df))  # Should include 'loglatestPrice'
-
-    #print("BREAK BREAK BREAK ")
-    
-    #print(names(reduced_test_data_x_df))  # Should include 'loglatestPrice'
-    
-    # Fit linear regression model
-    lm.reduced = lm(loglatestPrice ~ ., data = reduced_train_data_x_df)
-    lm.predict = predict(lm.reduced, newdata = reduced_test_data_x_df)
-    
-    # Compute MSE
-    mse_values[i] = mean((reduced_test_data_x_df$loglatestPrice - lm.predict)^2)
-  } else {
-    mse_values[i] = NA  # No predictors selected
-  }
-}
-#via analyzing the graph we get the following optimal threshold
-opt.threshold = NULL
-opt.threshold.num = NULL
-
-# Loop through the MSE values and find the threshold just before MSE exceeds 0.2
-for (i in 2:length(mse_values)) {
-  if (mse_values[i] > 0.15 && mse_values[i - 1] <= 0.15) {
-    opt_threshold = thresholds[i - 1]
-    opt_threshold_num = i-1
-    break  
-  }
-}
-
-# Print the threshold just before MSE exceeds 0.21
-paste('We thus having that by finding the elbow joint, the optimal threshold is about', opt_threshold, 'at index', opt_threshold_num, '. It contains',num_non_zero_coefs[opt_threshold_num], 'non-zero coefficients.' )
-
-# Adjust margins to create more space for the second y-axis label
-par(mar = c(5, 4, 4, 6)) 
-
-# Plot MSE and number of non-zero predictors on the same plot
-plot(thresholds, mse_values, type = "l", col = "blue", 
-     xlab = "Threshold (Coefficient Magnitude)", 
-     ylab = "Mean Squared Error", 
-     main = "MSE and Number of Non-Zero Predictors vs. Threshold")
-
-# Add a black dot at a specific index (e.g., opt_index)
-points(thresholds[opt_threshold_num], mse_values[opt_threshold_num], col = "black", pch = 16)  # pch = 16 is for filled circles
-
-
-# Add the second y-axis for the number of non-zero predictors
-par(new = TRUE)
-plot(thresholds, num_non_zero_coefs, type = "l", col = "red", 
-     axes = FALSE, xlab = "", ylab = "")
-
-# Label the right axis
-axis(side = 4)
-mtext("Number of Non-Zero Predictors", side = 4, line = 3)
-print(thresholds[opt_threshold_num])
-print(mse_values[opt_threshold_num])
-
-
-grid.arrange(plot_naive, plot_optimal, ncol = 2)
 
 ```
-
-Analyzing the results from the vector
 
 # Comparison with Naive Model
 
@@ -313,42 +218,21 @@ when valuing houses.
 ```{r}
 # Fit the normal linear regression model for naive data 
 lm_model_naive = lm(train_naive$loglatestPrice ~ ., data = train_naive)
+residuals_naive = resid(lm_model_naive)
 
 naive_predictions <- predict(lm_model_naive, newdata = test_naive)
-residuals_naive <- resid(lm_model_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
-
-paste('Our coefficients form a linear model with MSE', mse_values[opt_threshold_num], 'and the naive model produces MSE',mse_naive,'. We may thus conclude our the naive model may actually be superior.')
+paste('The naive model produces MSE',mse_naive,'. Ridge Produces an MSE of ', mse.ridge)
 ```
 
 ## Residual Plots
 
 ```{r}
-# Fit the optimal model - assumed to be more space efficient than saving a model for each threshold
-coef_thresholded = ridge.coef
-coef_thresholded = as.numeric(ridge.coef[-1])  # Remove intercept
+# Residual plot for the naive model
+par(mfrow = c(1, 1))  # Set up two plots side by side
 
-coef_thresholded[abs(coef_thresholded) < thresholds[opt_threshold_num]] = 0
-
-opt_predictors = which(coef_thresholded != 0)
-
-opt_reduced_train_data_x = train[, opt_predictors, drop = FALSE]
-opt_reduced_test_data_x = test[, opt_predictors, drop = FALSE]
-    
-opt_reduced_train_data_x_df = cbind(as.data.frame(opt_reduced_train_data_x), loglatestPrice = train_data_y)
-opt_reduced_test_data_x_df = cbind(as.data.frame(opt_reduced_test_data_x), loglatestPrice = test_data_y)
-
-lm_model_optimal = lm(loglatestPrice ~ ., data = opt_reduced_train_data_x_df)
-opt_predictions = predict(lm_model_optimal, newdata = opt_reduced_test_data_x_df)
-
-paste("MSE: ", mean((opt_reduced_test_data_x_df$loglatestPrice - opt_predictions)^2))
-residuals_opt = resid(lm_model_optimal)
-
-summary(lm_model_optimal)
-```
-
-```{r}
+# Plot residuals for the optimal model
 ggplot(data = data.frame(residuals_naive), aes(x = residuals_naive)) +
   geom_histogram(aes(y = ..density..), bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
   geom_density(color = "red", size = 1) +
@@ -356,36 +240,53 @@ ggplot(data = data.frame(residuals_naive), aes(x = residuals_naive)) +
   theme_minimal()
 
 # Plot residuals for the optimal model
+residuals_opt = test_data_y - ridge.predict
 ggplot(data = data.frame(residuals_opt), aes(x = residuals_opt)) +
   geom_histogram(aes(y = ..density..), bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
   geom_density(color = "red", size = 1) +
   labs(title = "Residuals for Optimal Model", x = "Residuals", y = "Density") +
   theme_minimal()
+# Reset the plot layout
 
-#grid.arrange(plot_naive, plot_opt, ncol = 2)
 ```
 
-# Whole Regression Model
+## Hypothesis Testing
 
 ```{r}
-train_data_x_df = cbind(as.data.frame(train_data_x), loglatestPrice = train_data_y)
-test_data_x_df = cbind(as.data.frame(test_data_x), loglatestPrice = test_data_y)
+## coef of ridge model
+ones_column = matrix(1, nrow=nrow(train_data_x), ncol=1)
 
-lm_model_whole = lm(loglatestPrice ~., data = train_data_x_df)
+result_matrix = cbind(ridge.coef@Dimnames[[1]], ridge.coef@x)
 
-predictions = predict(lm_model_whole, newdata = test_data_x_df)
-residuals_whole <- resid(lm_model_whole)
-
-paste('MSE: ',mean((test_data_x_df$loglatestPrice - predictions)^2))
-
-
-summary(lm_model_whole)
+lambda = 10
+Y = as.matrix(train[, 6])
+X = cbind(ones_column, as.matrix(train[,-6]))
+lambdaI = diag(lambda, ncol(X))
 
 
-ggplot(data = data.frame(residuals_whole), aes(x = residuals_whole)) +
-  geom_histogram(aes(y = ..density..), bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
-  geom_density(color = "red", size = 1) +
-  labs(title = "Whole Model Residual Plot", x = "Residuals", y = "Density") +
-  theme_minimal()
+betahat = solve(t(X) %*% X + lambdaI) %*% t(X) %*% Y
+H = X %*% solve(t(X) %*% X + lambdaI) %*% t(X)
+v = nrow(X) -sum(diag(H))
+sigmahat = (t(Y - X %*% betahat) %*% (Y - X %*% betahat)) / v
 
+varbetahat = solve(t(X) %*% X + lambdaI) %*% t(X) %*% X %*% solve(t(X) %*% X + lambdaI)
+varbetahat = sigmahat * varbetahat
+
+test_stat_func = function(B_i, varbh_i) {
+    return(abs(B_i) / sqrt(varbh_i))
+}
+
+critical_value <- qt(0.975, df = v)  # 95% confidence level
+
+for (i in 1:nrow(result_matrix)) {
+  test_stat = test_stat_func(as.numeric(betahat[i]),  varbetahat[i, i])
+  
+  # Set coefficient to 0 if the test fails (i.e., |test_stat| < critical_value)
+  if (test_stat < critical_value) {
+    result_matrix[i, 2] <- 0  
+  }
+}
+
+# Print the final result matrix
+print(result_matrix)
 ```
