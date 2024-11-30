@@ -25,6 +25,7 @@ library(dplyr)
 library(MASS)
 library(ggplot2)
 library(lattice)
+library(lmridge)
 
 data = read_csv("/Users/evanschwartz/664Project/Data/final_data_tranform_clean.csv", show_col_types = FALSE)
 
@@ -61,8 +62,8 @@ folds = createFolds(train$loglatestPrice, k = 7, list = TRUE)
 ```{r}
 MSE.bic = vector()
 bic.num = vector()
-MSE.aic = vector()
-aic.num = vector()
+#MSE.aic = vector()
+#aic.num = vector()
 
 for (j in 1:7) {
   #setting respective fold to either training or testing
@@ -209,6 +210,40 @@ paste("best lambda for ridge is ", bestlambda)
 
 ```
 
+```{r}
+# Preparing data
+train_data_x = train[, -6]
+train_data_y = as.numeric(unlist(train[, 6]))
+test_data_x = test[, -6]
+test_data_y = as.numeric(unlist(test[, 6]))
+
+grid = 10^seq(10, -2, length = 100)
+
+# Finding the best lambda using cross-validation
+cv_errors = sapply(grid, function(lambda) {
+  model = lmridge(train_data_y ~ ., data = train_data_x, K = lambda)
+  pred = predict(model, newdata = test_data_x)  # Predicting on the test set
+  mean((test_data_y - pred)^2)  # Calculating MSPE
+})
+
+bestlambda = grid[which.min(cv_errors)]
+
+# Plotting MSPE vs. lambda
+plot(log10(grid), cv_errors, type = "b", main = "MSPE of Ridge with Respective Lambdas",
+     xlab = "Log10(Lambda)", ylab = "MSPE")
+
+ridge_model = lmridge(train_data_y ~ ., data = train_data_x, K = bestlambda)
+
+ridge_coef = coef(ridge_model)
+
+ridge_predict = predict(ridge_model, newdata = test_data_x)
+
+mse_ridge = mean((test_data_y - ridge_predict)^2)
+
+paste("Mean squared error on test data for Ridge is", mse_ridge)
+paste("Best lambda for Ridge is", bestlambda)
+```
+
 # Comparison with Naive Model
 
 As noted in our report we now consider a model based on what some
@@ -223,7 +258,7 @@ residuals_naive = resid(lm_model_naive)
 naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
-paste('The naive model produces MSE',mse_naive,'. Ridge Produces an MSE of ', mse.ridge)
+paste('The naive model produces MSE',mse_naive,'. Ridge Produces an MSE of ', mse_ridge)
 ```
 
 ## Residual Plots
@@ -241,6 +276,7 @@ ggplot(data = data.frame(residuals_naive), aes(x = residuals_naive)) +
 
 # Plot residuals for the optimal model
 residuals_opt = test_data_y - ridge.predict
+
 ggplot(data = data.frame(residuals_opt), aes(x = residuals_opt)) +
   geom_histogram(aes(y = ..density..), bins = 50, fill = "lightblue", color = "black", alpha = 0.7) +
   geom_density(color = "red", size = 1) +
@@ -250,26 +286,22 @@ ggplot(data = data.frame(residuals_opt), aes(x = residuals_opt)) +
 
 ```
 
-## Hypothesis Testing
+## Summary
 
 ```{r}
-## coef of ridge model
-ones_column = matrix(1, nrow=nrow(train_data_x), ncol=1)
+betahat = ridge_coef
+print("fail 1")
+varbetahat = vcov(ridge_model)
+print("fail 2")
+H = hatr(ridge_model)	
+print("fail 3")
+v = nrow(train_data_x) -sum(diag(H))
+print("fail 4")
 
-result_matrix = cbind(ridge.coef@Dimnames[[1]], ridge.coef@x)
 
-lambda = 10
-Y = as.matrix(train[, 6])
-X = cbind(ones_column, as.matrix(train[,-6]))
-lambdaI = diag(lambda, ncol(X))
+sigmahat = (t(train_data_y - train_data_x %*% betahat) %*% (train_data_y - train_data_x%*% betahat)) / v
+print("fail 5")
 
-
-betahat = solve(t(X) %*% X + lambdaI) %*% t(X) %*% Y
-H = X %*% solve(t(X) %*% X + lambdaI) %*% t(X)
-v = nrow(X) -sum(diag(H))
-sigmahat = (t(Y - X %*% betahat) %*% (Y - X %*% betahat)) / v
-
-varbetahat = solve(t(X) %*% X + lambdaI) %*% t(X) %*% X %*% solve(t(X) %*% X + lambdaI)
 varbetahat = sigmahat * varbetahat
 
 test_stat_func = function(B_i, varbh_i) {
