@@ -211,37 +211,60 @@ paste("best lambda for ridge is ", bestlambda)
 ```
 
 ```{r}
-# Preparing data
-train_data_x = train[, -6]
+# Scale training data and retain scaling parameters
+scaling_info = scale(train[, -6])  # Store scaling info for later use
+train_data_x = scale(train[, -6], center = attr(scaling_info, "scaled:center"), 
+                      scale = attr(scaling_info, "scaled:scale"))
 train_data_y = as.numeric(unlist(train[, 6]))
-test_data_x = test[, -6]
+
+# Scale test data using training scaling parameters
+test_data_x = scale(test[, -6], center = attr(scaling_info, "scaled:center"), 
+                     scale = attr(scaling_info, "scaled:scale"))
 test_data_y = as.numeric(unlist(test[, 6]))
 
+# Define the lambda grid
 grid = 10^seq(10, -2, length = 100)
 
-# Finding the best lambda using cross-validation
+# Combine response and predictors into a data frame for lmridge
+train_data = data.frame(train_data_y, train_data_x)
+test_data = data.frame(test_data_y, test_data_x)
+
+start.time <- Sys.time()
+
+# Cross-validation to find the best lambda
 cv_errors = sapply(grid, function(lambda) {
-  model = lmridge(train_data_y ~ ., data = train_data_x, K = lambda)
-  pred = predict(model, newdata = test_data_x)  # Predicting on the test set
-  mean((test_data_y - pred)^2)  # Calculating MSPE
+  model = lmridge(train_data_y ~ ., data = train_data, K = lambda)
+  pred = predict(model, newdata = test_data, type = "response")  # Predict on the test set
+  mean((test_data_y - pred)^2)  # Calculate mean squared prediction error
 })
 
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+
+
+# Identify the best lambda
 bestlambda = grid[which.min(cv_errors)]
 
-# Plotting MSPE vs. lambda
+# Plot MSPE vs. Lambda
 plot(log10(grid), cv_errors, type = "b", main = "MSPE of Ridge with Respective Lambdas",
      xlab = "Log10(Lambda)", ylab = "MSPE")
 
-ridge_model = lmridge(train_data_y ~ ., data = train_data_x, K = bestlambda)
+# Fit the ridge regression model with the best lambda
+ridge_model = lmridge(train_data_y ~ ., data = train_data, K = bestlambda)
 
+# Extract coefficients
 ridge_coef = coef(ridge_model)
 
-ridge_predict = predict(ridge_model, newdata = test_data_x)
+# Make predictions on the test set
+ridge_predict = predict(ridge_model, newdata = test_data, type = "response")
 
+# Compute MSE on the test set
 mse_ridge = mean((test_data_y - ridge_predict)^2)
 
+# Output results
 paste("Mean squared error on test data for Ridge is", mse_ridge)
 paste("Best lambda for Ridge is", bestlambda)
+
 ```
 
 # Comparison with Naive Model
@@ -289,36 +312,37 @@ ggplot(data = data.frame(residuals_opt), aes(x = residuals_opt)) +
 ## Summary
 
 ```{r}
-betahat = ridge_coef
-print("fail 1")
-varbetahat = vcov(ridge_model)
-print("fail 2")
-H = hatr(ridge_model)	
-print("fail 3")
-v = nrow(train_data_x) -sum(diag(H))
-print("fail 4")
+summary()
+#betahat = ridge_coef
+#print("fail 1")
+#varbetahat = vcov(ridge_model)
+#print("fail 2")
+#H = hatr(ridge_model)	
+#print("fail 3")
+#v = nrow(train_data_x) -sum(diag(H))
+#print("fail 4")
 
 
-sigmahat = (t(train_data_y - train_data_x %*% betahat) %*% (train_data_y - train_data_x%*% betahat)) / v
-print("fail 5")
+#sigmahat = (t(train_data_y - train_data_x %*% betahat) %*% (train_data_y - train_data_x%*% betahat)) / v
+#print("fail 5")
 
-varbetahat = sigmahat * varbetahat
+#varbetahat = sigmahat * varbetahat
 
-test_stat_func = function(B_i, varbh_i) {
-    return(abs(B_i) / sqrt(varbh_i))
-}
+#test_stat_func = function(B_i, varbh_i) {
+#    return(abs(B_i) / sqrt(varbh_i))
+#}
 
-critical_value <- qt(0.975, df = v)  # 95% confidence level
+#critical_value <- qt(0.975, df = v)  # 95% confidence level
 
-for (i in 1:nrow(result_matrix)) {
-  test_stat = test_stat_func(as.numeric(betahat[i]),  varbetahat[i, i])
+#for (i in 1:nrow(result_matrix)) {
+#  test_stat = test_stat_func(as.numeric(betahat[i]),  varbetahat[i, i])
   
   # Set coefficient to 0 if the test fails (i.e., |test_stat| < critical_value)
-  if (test_stat < critical_value) {
-    result_matrix[i, 2] <- 0  
-  }
-}
+#  if (test_stat < critical_value) {
+#    result_matrix[i, 2] <- 0  
+#  }
+#}
 
 # Print the final result matrix
-print(result_matrix)
+#print(result_matrix)
 ```
