@@ -48,6 +48,7 @@ index90 = floor(0.9 * nrow(shuffleddata))
 
 train = shuffleddata[1:index90,]
 train_naive = data_naive_shuff[1:index90,]
+
 # Create the 10% testing data
 test = shuffleddata[(index90 + 1):nrow(shuffleddata),]
 test_naive = data_naive_shuff[(index90 + 1):nrow(data_naive_shuff),]
@@ -62,50 +63,53 @@ folds = createFolds(train$loglatestPrice, k = 7, list = TRUE)
 ```{r}
 MSE.bic = vector()
 bic.num = vector()
-#MSE.aic = vector()
-#aic.num = vector()
-
+MSE.aic = vector()
+aic.num = vector()
+ 
 for (j in 1:7) {
-  #setting respective fold to either training or testing
-  train_data = train[-folds[[j]], ] #eliminate columns in testing data
-  test_data = train[folds[[j]], ]
-  
-  #doing best subset selection on our data
-  regfit.train = regsubsets(loglatestPrice ~ ., data = train_data,  method= "backward" )
-  reg.summary = summary(regfit.train)
-  
-  #selecting which subset is the best, specifically selecting how many variables it has 
-  bic.number = which.min(reg.summary$bic)
-  bic.num[j] = bic.number
-
-  #creating the model with the respective number of coefficents
-  bic.mdl = coef(regfit.train, bic.number)
-  
-  # testing the models that are created
-  test.mat2 = model.matrix(loglatestPrice ~ ., data = test_data)
-  bic.pred = test.mat2[, names(bic.mdl)] %*% bic.mdl
-  
-  
-  # Start with the full model
-  full.model = lm(loglatestPrice ~ ., data = train_data)
-  
-  # Perform backward stepwise selection using AIC
-  #stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
-
-  #predict with the 
-  #aic.pred <- predict(stepwise.model, newdata = test_data)
-  #aic.num[j] <- length(coef(stepwise.model))
-
-
-  #computing the MSE for each model
-  MSE.bic[j] = mean(( test_data$loglatestPrice - bic.pred)**2)
-  #MSE.aic[j] = mean((test_data$loglatestPrice - aic.pred)**2)
+   #setting respective fold to either training or testing
+   train_data = train[-folds[[j]], ] #eliminate columns in testing data
+   test_data = train[folds[[j]], ]
+   
+   start.time <- Sys.time()
+   #doing best subset selection on our data
+   regfit.train = regsubsets(loglatestPrice ~ ., data = train_data,  method= "backward" )
+   reg.summary = summary(regfit.train)
+   
+    #selecting which subset is the best, specifically selecting how many variables it has 
+    bic.number = which.min(reg.summary$bic)
+    bic.num[j] = bic.number
+ 
+    #creating the model with the respective number of coefficents
+    bic.mdl = coef(regfit.train, bic.number)
+   
+    # testing the models that are created
+    test.mat2 = model.matrix(loglatestPrice ~ ., data = test_data)
+    bic.pred = test.mat2[, names(bic.mdl)] %*% bic.mdl
+   
+   
+    # Start with the full model
+    full.model = lm(loglatestPrice ~ ., data = train_data)
+   
+    # Perform backward stepwise selection using AIC
+    stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
+ 
+    #predict with the 
+    aic.pred = predict(stepwise.model, newdata = test_data)
+    aic.num[j] = length(coef(stepwise.model))
+ 
+ 
+    #computing the MSE for each model
+    MSE.bic[j] = mean(( test_data$loglatestPrice - bic.pred)**2)
+    MSE.aic[j] = mean((test_data$loglatestPrice - aic.pred)**2)
+    end.time <- Sys.time()
+    time.taken <- end.time - start.time
+    print(time.taken)
 }
 
-paste("Estimated MSE for BIC is ", sum(MSE.bic))
-#paste("Estimated MSE for AIC is ", sum(MSE.aic))
- 
-bic.num
+paste("Estimated MSPE for BIC is ", sum(MSE.bic))
+paste("Estimated MSPE for BIC is ", sum(MSE.aic))
+
 ```
 
 BIC says model with \_\_\_ variables, AIC says model with \_\_\_
@@ -144,7 +148,7 @@ for (j in 1:7) {
   vectorMSElasso[j] = mse.lasso
 }
 
-mean(vectorMSElasso)
+sum(vectorMSElasso)
 ```
 
 ## Ridge
@@ -154,8 +158,6 @@ set.seed(1234)
 
 vectorMSEridge = vector()
 for (j in 1:7) {
-  
-  
   train_data = train[-folds[[j]], ]
   test_data = train[folds[[j]], ]
   
@@ -177,94 +179,63 @@ for (j in 1:7) {
   mse.lasso = mean((test_data_y - lasso.predict)^2)
   vectorMSEridge[j] = mse.lasso
 }
-mean(vectorMSEridge)
+sum(vectorMSEridge)
 ```
 
 # The Optimal model
 
-```{r}
-#lowest mean squared error was Ridge, so we will run this over entire training dataset
-train_data_x = as.matrix(train[,-6])
-train_data_y = as.matrix(train[, 6])
-test_data_x = as.matrix(test[,-6])
-test_data_y = as.matrix(test[, 6])
-  
-grid = 10^seq(10, -2, length = 100)
-  
-ridge.mod.cv = cv.glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid, nfolds = 5)
-plot(ridge.mod.cv, main = "MSE of Ridge with Respective Lambdas")
-
-bestlambda = ridge.mod.cv$lambda.min
-
-
-lasso.fulldata = glmnet(train_data_x, train_data_y, alpha = 0, lambda = grid)
-ridge.coef = predict(lasso.fulldata , type = "coefficients",s = bestlambda)
-
-
-ridge.predict = predict(lasso.fulldata, s = bestlambda, newx = test_data_x)
-mse.ridge = mean((test_data_y - ridge.predict)^2)
-paste("mean squared error on test data for ridge is ", mse.ridge)
-
-
-paste("best lambda for ridge is ", bestlambda)
-
-```
+First we engage in the computationally intensive process of finding the
+optimal AIC model
 
 ```{r}
-# Scale training data and retain scaling parameters
-scaling_info = scale(train[, -6])  # Store scaling info for later use
-train_data_x = scale(train[, -6], center = attr(scaling_info, "scaled:center"), 
-                      scale = attr(scaling_info, "scaled:scale"))
-train_data_y = as.numeric(unlist(train[, 6]))
-
-# Scale test data using training scaling parameters
-test_data_x = scale(test[, -6], center = attr(scaling_info, "scaled:center"), 
-                     scale = attr(scaling_info, "scaled:scale"))
-test_data_y = as.numeric(unlist(test[, 6]))
-
-# Define the lambda grid
-grid = 10^seq(10, -2, length = 100)
-
-# Combine response and predictors into a data frame for lmridge
-train_data = data.frame(train_data_y, train_data_x)
-test_data = data.frame(test_data_y, test_data_x)
+# Fit the full model using the training data
+full.model = lm(train$loglatestPrice ~ ., data = train)
 
 start.time <- Sys.time()
 
-# Cross-validation to find the best lambda
-cv_errors = sapply(grid, function(lambda) {
-  model = lmridge(train_data_y ~ ., data = train_data, K = lambda)
-  pred = predict(model, newdata = test_data, type = "response")  # Predict on the test set
-  mean((test_data_y - pred)^2)  # Calculate mean squared prediction error
-})
+# Perform backward stepwise selection using AIC
+stepwise.model = stepAIC(full.model, direction = "backward", trace = FALSE)
 
 end.time <- Sys.time()
 time.taken <- end.time - start.time
+print(time.taken)    
+```
 
+Now using the model we analyze the results.
 
-# Identify the best lambda
-bestlambda = grid[which.min(cv_errors)]
+```{r}
+# Get the predictors in the optimal model
+optimal.predictors = names(coef(stepwise.model))[-1]  # Remove the intercept
 
-# Plot MSPE vs. Lambda
-plot(log10(grid), cv_errors, type = "b", main = "MSPE of Ridge with Respective Lambdas",
-     xlab = "Log10(Lambda)", ylab = "MSPE")
+# Predict on the test set
+aic.pred = predict(stepwise.model, newdata = test)
 
-# Fit the ridge regression model with the best lambda
-ridge_model = lmridge(train_data_y ~ ., data = train_data, K = bestlambda)
+# Calculate MSPE for the final model
+mspe = mean((test$loglatestPrice - aic.pred)^2)
 
-# Extract coefficients
-ridge_coef = coef(ridge_model)
+# Compute MSPEs for subsets of predictors
+mspe.values = numeric(length(coef(stepwise.model)))
+model.sizes = seq_along(mspe.values)
 
-# Make predictions on the test set
-ridge_predict = predict(ridge_model, newdata = test_data, type = "response")
+for (i in model.sizes) {
+  predictors = names(coef(stepwise.model))[1:i]
+  formula = as.formula(paste("loglatestPrice ~", paste(predictors[-1], collapse = " + ")))  # Exclude intercept
+  subset.model = lm(formula, data = train)
+  subset.pred = predict(subset.model, newdata = test_data_x)
+  mspe.values[i] = mean((test_data_y - subset.pred)^2)
+}
 
-# Compute MSE on the test set
-mse_ridge = mean((test_data_y - ridge_predict)^2)
+# Plot MSPE as a function of model size
+plot(model.sizes, mspe.values, type = "b", pch = 19, col = "blue",
+     xlab = "Model Size", ylab = "MSPE", main = "MSPE vs. Model Size")
+abline(v = which.min(mspe.values), col = "red", lty = 2)  # Optimal model size
 
 # Output results
-paste("Mean squared error on test data for Ridge is", mse_ridge)
-paste("Best lambda for Ridge is", bestlambda)
+cat("Optimal MSPE:", min(mspe.values), "\n")
+cat("Optimal predictors:", optimal.predictors, "\n")
 
+# Return the optimal subset of predictors
+optimal.predictors
 ```
 
 # Comparison with Naive Model
@@ -281,7 +252,7 @@ residuals_naive = resid(lm_model_naive)
 naive_predictions <- predict(lm_model_naive, newdata = test_naive)
 
 mse_naive <- mean((test_naive$loglatestPrice - naive_predictions)^2)
-paste('The naive model produces MSE',mse_naive,'. Ridge Produces an MSE of ', mse_ridge)
+paste('The naive model produces MSE',mse_naive,'. AIC Produces an MSE of ',  min(mspe.values))
 ```
 
 ## Residual Plots
@@ -312,7 +283,14 @@ ggplot(data = data.frame(residuals_opt), aes(x = residuals_opt)) +
 ## Summary
 
 ```{r}
-summary()
+start.time <- Sys.time()
+summary(ridge_model)
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+
+print(time.taken)
+
+
 #betahat = ridge_coef
 #print("fail 1")
 #varbetahat = vcov(ridge_model)
